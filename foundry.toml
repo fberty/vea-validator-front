@@ -1,0 +1,11 @@
+[profile.default]
+src = "contracts/src"
+out = "contracts/out"
+libs = ["contracts/lib"]
+cache_path = "contracts/cache"
+script = "contracts/script"
+solc_version = "0.8.24"
+
+[rpc_endpoints]
+arbitrum = "http://localhost:8545"
+mainnet = "http://localhost:8546"
