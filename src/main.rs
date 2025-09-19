@@ -12,19 +12,19 @@ async fn main() -> Result<()> {
     // Load configuration from environment
     let inbox_address = Address::from_str(
         &std::env::var("VEA_INBOX_ARB_TO_ETH")
-            .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string())
+            .expect("VEA_INBOX_ARB_TO_ETH must be set")
     )?;
     
     let outbox_address = Address::from_str(
         &std::env::var("VEA_OUTBOX_ARB_TO_ETH")
-            .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string())
+            .expect("VEA_OUTBOX_ARB_TO_ETH must be set")
     )?;
     
     let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL")
-        .unwrap_or_else(|_| "http://localhost:8545".to_string());
+        .expect("ARBITRUM_RPC_URL must be set");
     
     let mainnet_rpc = std::env::var("MAINNET_RPC_URL")
-        .unwrap_or_else(|_| "http://localhost:8546".to_string());
+        .expect("MAINNET_RPC_URL must be set");
     
     // Create event listener
     let listener = EventListener::new(

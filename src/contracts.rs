@@ -7,6 +7,10 @@ sol! {
         event MessageSent(bytes _nodeData);
         event SnapshotSaved(bytes32 _snapshot, uint256 _epoch, uint64 _count);
         event SnapshotSent(uint256 indexed _epochSent, bytes32 _ticketId);
+        
+        function sendMessage(address to, bytes calldata data) external returns (uint64);
+        function saveSnapshot() external;
+        function count() external view returns (uint64);
     }
 
     #[derive(Debug)]
