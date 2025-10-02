@@ -1,4 +1,4 @@
-use alloy::primitives::Address;
+use alloy::primitives::{Address, FixedBytes};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::network::{Ethereum, EthereumWallet};
@@ -10,6 +10,39 @@ use vea_validator::{
     claim_handler::{ClaimHandler, ClaimAction},
     contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth},
 };
+
+fn make_claim(state_root: FixedBytes<32>, claimer: Address) -> IVeaOutboxArbToEth::Claim {
+    IVeaOutboxArbToEth::Claim {
+        stateRoot: state_root,
+        claimer,
+        timestampClaimed: 0,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: IVeaOutboxArbToEth::Party::None,
+        challenger: Address::ZERO,
+    }
+}
+
+async fn handle_claim_action<P: alloy::providers::Provider>(
+    handler: &Arc<ClaimHandler<P>>,
+    action: ClaimAction,
+    route: &str,
+) {
+    match action {
+        ClaimAction::None => {},
+        ClaimAction::Claim { epoch, state_root } => {
+            println!("[{}] Submitting claim for epoch {}", route, epoch);
+            let _ = handler.submit_claim(epoch, state_root).await;
+        }
+        ClaimAction::Challenge { epoch, incorrect_claim } => {
+            println!("[{}] Challenging claim for epoch {}", route, epoch);
+            let _ = handler.challenge_claim(
+                epoch,
+                make_claim(incorrect_claim.state_root, incorrect_claim.claimer)
+            ).await;
+        }
+    }
+}
 
 async fn run_validator_for_route(
     route_name: &str,
@@ -75,31 +108,8 @@ async fn run_validator_for_route(
             let handler = claim_handler_for_epoch.clone();
             let route = route_epoch.clone();
             Box::pin(async move {
-                match handler.handle_epoch_end(epoch).await {
-                    Ok(action) => {
-                        match action {
-                            ClaimAction::None => {
-                            }
-                            ClaimAction::Claim { epoch, state_root } => {
-                                println!("[{}] Submitting claim for epoch {}", route, epoch);
-                                let _ = handler.submit_claim(epoch, state_root).await;
-                            }
-                            ClaimAction::Challenge { epoch, incorrect_claim } => {
-                                println!("[{}] Challenging claim for epoch {}", route, epoch);
-                                let claim = IVeaOutboxArbToEth::Claim {
-                                    stateRoot: incorrect_claim.state_root,
-                                    claimer: incorrect_claim.claimer,
-                                    timestampClaimed: 0,
-                                    timestampVerification: 0,
-                                    blocknumberVerification: 0,
-                                    honest: IVeaOutboxArbToEth::Party::None,
-                                    challenger: Address::ZERO,
-                                };
-                                let _ = handler.challenge_claim(epoch, claim).await;
-                            }
-                        }
-                    }
-                    Err(_) => {},
+                if let Ok(action) = handler.handle_epoch_end(epoch).await {
+                    handle_claim_action(&handler, action, &route).await;
                 }
                 Ok(())
             })
@@ -122,16 +132,7 @@ async fn run_validator_for_route(
                             Ok(true) => println!("[{}] Existing claim is valid", route),
                             Ok(false) => {
                                 println!("[{}] Existing claim is INVALID - need to challenge", route);
-                                let claim = IVeaOutboxArbToEth::Claim {
-                                    stateRoot: existing_claim.state_root,
-                                    claimer: existing_claim.claimer,
-                                    timestampClaimed: 0,
-                                    timestampVerification: 0,
-                                    blocknumberVerification: 0,
-                                    honest: IVeaOutboxArbToEth::Party::None,
-                                    challenger: Address::ZERO,
-                                };
-                                if let Err(e) = handler.challenge_claim(event.epoch, claim).await {
+                                if let Err(e) = handler.challenge_claim(event.epoch, make_claim(existing_claim.state_root, existing_claim.claimer)).await {
                                     eprintln!("[{}] Failed to challenge claim: {}", route, e);
                                 }
                             }
@@ -160,26 +161,8 @@ async fn run_validator_for_route(
             Box::pin(async move {
                 println!("[{}] Claim detected for epoch {} by {}", route, event.epoch, event.claimer);
 
-                match handler.handle_claim_event(event.clone()).await {
-                    Ok(ClaimAction::Challenge { epoch, incorrect_claim }) => {
-                        println!("[{}] Need to challenge incorrect claim for epoch {}", route, epoch);
-                        let claim = IVeaOutboxArbToEth::Claim {
-                            stateRoot: incorrect_claim.state_root,
-                            claimer: incorrect_claim.claimer,
-                            timestampClaimed: 0,
-                            timestampVerification: 0,
-                            blocknumberVerification: 0,
-                            honest: IVeaOutboxArbToEth::Party::None,
-                            challenger: Address::ZERO,
-                        };
-                        if let Err(e) = handler.challenge_claim(epoch, claim).await {
-                            eprintln!("[{}] Failed to challenge claim: {}", route, e);
-                        }
-                    }
-                    Ok(_) => {
-                        println!("[{}] Claim is valid or no action needed", route);
-                    }
-                    Err(e) => eprintln!("[{}] Error handling claim event: {}", route, e),
+                if let Ok(action) = handler.handle_claim_event(event.clone()).await {
+                    handle_claim_action(&handler, action, &route).await;
                 }
                 Ok(())
             })
@@ -202,16 +185,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL")
         .expect("ARBITRUM_RPC_URL must be set");
 
-    let private_key = if let Ok(key) = std::env::var("PRIVATE_KEY") {
-        key
-    } else if let Ok(_) = std::env::var("PRIVATE_KEY_FILE") {
-        std::fs::read_to_string("/run/secrets/validator_key")
-            .expect("Failed to read private key from Docker secret")
-            .trim()
-            .to_string()
-    } else {
-        panic!("PRIVATE_KEY not provided. Set via environment variable or Docker secret");
-    };
+    let private_key = std::env::var("PRIVATE_KEY")
+        .or_else(|_| std::fs::read_to_string("/run/secrets/validator_key")
+            .map(|s| s.trim().to_string()))
+        .expect("PRIVATE_KEY not set or /run/secrets/validator_key not found");
 
     let signer = PrivateKeySigner::from_str(&private_key)?;
     let wallet_address = signer.address();
@@ -265,23 +242,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running validators for both ARB_TO_ETH and ARB_TO_GNOSIS routes simultaneously...");
 
     tokio::select! {
-        result = arb_to_eth_handle => {
-            match result {
-                Ok(Ok(())) => println!("ARB_TO_ETH validator completed"),
-                Ok(Err(e)) => eprintln!("ARB_TO_ETH validator error: {}", e),
-                Err(e) => eprintln!("ARB_TO_ETH task panic: {}", e),
-            }
-        }
-        result = arb_to_gnosis_handle => {
-            match result {
-                Ok(Ok(())) => println!("ARB_TO_GNOSIS validator completed"),
-                Ok(Err(e)) => eprintln!("ARB_TO_GNOSIS validator error: {}", e),
-                Err(e) => eprintln!("ARB_TO_GNOSIS task panic: {}", e),
-            }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!("\nShutting down all validators...");
-        }
+        _ = arb_to_eth_handle => println!("ARB_TO_ETH validator stopped"),
+        _ = arb_to_gnosis_handle => println!("ARB_TO_GNOSIS validator stopped"),
+        _ = tokio::signal::ctrl_c() => println!("\nShutting down..."),
     }
 
     Ok(())
