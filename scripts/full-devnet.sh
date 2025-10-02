@@ -159,6 +159,7 @@ cast send "$AMB_GNOSIS" "setMaxGasPerTx(uint256)" 2000000 \
   --private-key "$PK" --rpc-url "$GNOSIS_RPC" >/dev/null
 
 cat > .env.local <<EOF
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ARBITRUM_RPC_URL=$ARB_RPC
 MAINNET_RPC_URL=$ETH_RPC
 ETHEREUM_RPC_URL=$ETH_RPC
