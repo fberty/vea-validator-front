@@ -80,7 +80,7 @@ sol! {
         event MessageSent(bytes _nodeData);
         event SnapshotSaved(bytes32 _snapshot, uint256 _epoch, uint64 _count);
         event SnapshotSent(uint256 indexed _epochSent, bytes32 _ticketId);
-        
+
         function sendMessage(address to, bytes calldata data) external returns (uint64);
         function saveSnapshot() external;
         function count() external view returns (uint64);
@@ -88,7 +88,7 @@ sol! {
         function snapshots(uint256 epoch) external view returns (bytes32);
         function epochNow() external view returns (uint256);
         function epochFinalized() external view returns (uint256);
-        function sendSnapshot(uint256 _epoch, Claim memory _claim) external;
+        function sendSnapshot(uint256 _epoch, uint256 _gasLimit, Claim memory _claim) external;
         
         struct Claim {
             bytes32 stateRoot;

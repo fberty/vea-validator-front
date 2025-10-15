@@ -3,6 +3,21 @@ use alloy::providers::Provider;
 use crate::event_listener::ClaimEvent;
 use crate::contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth};
 use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
+/// Helper function to create a Claim struct for challenging
+pub fn make_claim(event: &ClaimEvent) -> IVeaOutboxArbToEth::Claim {
+    IVeaOutboxArbToEth::Claim {
+        stateRoot: event.state_root,
+        claimer: event.claimer,
+        timestampClaimed: event.timestamp_claimed,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: IVeaOutboxArbToEth::Party::None,
+        challenger: Address::ZERO,
+    }
+}
 
 pub struct ClaimHandler<P: Provider> {
     provider: Arc<P>,
@@ -10,6 +25,8 @@ pub struct ClaimHandler<P: Provider> {
     outbox_address: Address,
     inbox_address: Address,
     wallet_address: Address,
+    /// Local storage of claims received from events - reactive pattern
+    claims: Arc<RwLock<HashMap<u64, ClaimEvent>>>,
 }
 
 impl<P: Provider> ClaimHandler<P> {
@@ -26,19 +43,133 @@ impl<P: Provider> ClaimHandler<P> {
             outbox_address,
             inbox_address,
             wallet_address,
+            claims: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
+    /// Store a claim event in local storage - called when Claimed event is received
+    pub async fn store_claim(&self, claim: ClaimEvent) {
+        let mut claims = self.claims.write().await;
+        claims.insert(claim.epoch, claim);
+    }
+
+    /// Sync existing claims from blockchain on startup
+    /// This ensures we don't miss claims that happened before the validator started
+    pub async fn sync_existing_claims(&self, from_epoch: u64, to_epoch: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use alloy::rpc::types::Filter;
+        use alloy::primitives::keccak256;
+
+        println!("Syncing existing claims from epoch {} to {}", from_epoch, to_epoch);
+
+        let event_signature = "Claimed(address,uint256,bytes32)";
+        let event_hash = keccak256(event_signature.as_bytes());
+
+        let filter = Filter::new()
+            .address(self.outbox_address)
+            .event_signature(event_hash);
+
+        let logs = self.provider.get_logs(&filter).await?;
+
+        for log in logs {
+            if log.topics().len() >= 3 {
+                let claimer = Address::from_slice(&log.topics()[1].0[12..]);
+                let epoch = U256::from_be_bytes(log.topics()[2].0).to::<u64>();
+
+                // Only process epochs in our range
+                if epoch < from_epoch || epoch > to_epoch {
+                    continue;
+                }
+
+                if log.data().data.len() < 32 {
+                    continue;
+                }
+                let state_root = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
+
+                let block_number = log.block_number.unwrap_or(0);
+                let block = self.provider.get_block_by_number(block_number.into()).await?;
+                let timestamp_claimed = block.unwrap().header.timestamp as u32;
+
+                let claim = ClaimEvent {
+                    epoch,
+                    state_root,
+                    claimer,
+                    timestamp_claimed,
+                };
+
+                self.store_claim(claim).await;
+                println!("Synced claim for epoch {}", epoch);
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn get_claim_for_epoch(&self, epoch: u64) -> Result<Option<ClaimEvent>, Box<dyn std::error::Error + Send + Sync>> {
+        // First check local storage - reactive pattern
+        {
+            let claims = self.claims.read().await;
+            if let Some(claim) = claims.get(&epoch) {
+                return Ok(Some(claim.clone()));
+            }
+        }
+
+        // If not in local storage, check if claim exists on-chain
+        // This should only happen on startup or if we missed events
         let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.provider.clone());
-        
         let claim_hash = outbox.claimHashes(U256::from(epoch)).call().await?;
-        
+
         if claim_hash == FixedBytes::<32>::ZERO {
             return Ok(None);
         }
-        
-        panic!("get_claim_for_epoch: claim exists but event querying not implemented - this would return wrong data!");
+
+        // CRITICAL: Claim exists on-chain but not in local storage
+        // This means we missed an event - this is a serious issue
+        eprintln!("CRITICAL: Claim exists for epoch {} but not in local storage. Event listener may have missed it.", epoch);
+
+        // Try to recover by querying the event
+        use alloy::rpc::types::Filter;
+        use alloy::primitives::keccak256;
+
+        let event_signature = "Claimed(address,uint256,bytes32)";
+        let event_hash = keccak256(event_signature.as_bytes());
+
+        let filter = Filter::new()
+            .address(self.outbox_address)
+            .event_signature(event_hash)
+            .topic1(U256::from(epoch));
+
+        let logs = self.provider.get_logs(&filter).await?;
+
+        if logs.is_empty() {
+            // FATAL: Claim hash exists but no event found - blockchain inconsistency
+            panic!("FATAL: Claim hash exists for epoch {} but no Claimed event found. Blockchain state inconsistent!", epoch);
+        }
+
+        let log = &logs[0];
+
+        // Extract and store the claim
+        if log.topics().len() >= 3 {
+            let claimer = Address::from_slice(&log.topics()[1].0[12..]);
+            let state_root = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
+
+            let block_number = log.block_number.unwrap_or(0);
+            let block = self.provider.get_block_by_number(block_number.into()).await?;
+            let timestamp_claimed = block.unwrap().header.timestamp as u32;
+
+            let claim = ClaimEvent {
+                epoch,
+                state_root,
+                claimer,
+                timestamp_claimed,
+            };
+
+            // Store it for future use
+            self.store_claim(claim.clone()).await;
+
+            Ok(Some(claim))
+        } else {
+            panic!("FATAL: Invalid Claimed event format for epoch {}", epoch);
+        }
     }
 
     pub async fn get_correct_state_root(&self, epoch: u64) -> Result<FixedBytes<32>, Box<dyn std::error::Error + Send + Sync>> {
@@ -113,23 +244,6 @@ impl<P: Provider> ClaimHandler<P> {
         Ok(())
     }
 
-    // Trigger bridge resolution by calling sendSnapshot on inbox
-    pub async fn trigger_bridge_resolution(&self, epoch: u64, claim: IVeaInboxArbToEth::Claim) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let inbox = IVeaInboxArbToEth::new(self.inbox_address, self.inbox_provider.clone());
-        
-        let tx = inbox.sendSnapshot(U256::from(epoch), claim)
-            .from(self.wallet_address);
-            
-        let pending = tx.send().await?;
-        let receipt = pending.get_receipt().await?;
-        
-        if !receipt.status() {
-            return Err("sendSnapshot transaction failed".into());
-        }
-        
-        Ok(())
-    }
-
     // Handle epoch end - decide whether to claim or challenge
     pub async fn handle_epoch_end(&self, epoch: u64) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
         println!("Handling epoch end for epoch {}", epoch);
@@ -162,12 +276,15 @@ impl<P: Provider> ClaimHandler<P> {
         }
     }
 
-    // Handle when a claim event is detected
+    // Handle when a claim event is detected - REACTIVE pattern
     pub async fn handle_claim_event(&self, claim: ClaimEvent) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
         println!("Handling claim event for epoch {}", claim.epoch);
-        
+
+        // Store the claim in local storage immediately
+        self.store_claim(claim.clone()).await;
+
         let is_valid = self.verify_claim(&claim).await?;
-        
+
         if is_valid {
             println!("Claim for epoch {} is valid", claim.epoch);
             Ok(ClaimAction::None)

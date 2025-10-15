@@ -17,6 +17,7 @@ pub struct ClaimEvent {
     pub epoch: u64,
     pub state_root: FixedBytes<32>,
     pub claimer: Address,
+    pub timestamp_claimed: u32,  // Block timestamp when claim was made
 }
 
 pub struct EventListener<P: Provider> {
@@ -86,18 +87,24 @@ impl<P: Provider> EventListener<P> {
                 if log.topics().len() >= 3 {
                     let claimer = Address::from_slice(&log.topics()[1].0[12..]);
                     let epoch = U256::from_be_bytes(log.topics()[2].0).to::<u64>();
-                    
+
                     if log.data().data.len() < 32 {
                         continue;
                     }
                     let state_root = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
-                    
+
+                    // Get block timestamp when the claim was made
+                    let block_number = log.block_number.unwrap_or(0);
+                    let block = self.provider.get_block_by_number(block_number.into()).await?;
+                    let timestamp_claimed = block.unwrap().header.timestamp as u32;
+
                     let event = ClaimEvent {
                         epoch,
                         state_root,
                         claimer,
+                        timestamp_claimed,
                     };
-                    
+
                     let _ = handler(event).await;
                 }
             }

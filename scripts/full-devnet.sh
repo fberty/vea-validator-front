@@ -99,6 +99,12 @@ OUTBOX="$(
       10 | addr_of
 )"
 
+# Deploy ArbSys mock to the precompile address on Arbitrum devnet
+echo "Deploying ArbSys mock..."
+ARBSYS_BYTECODE="$(forge inspect contracts/src/test/bridge-mocks/arbitrum/ArbSysMock.sol:ArbSysMock bytecode)"
+cast rpc anvil_setCode 0x0000000000000000000000000000000000000064 "$ARBSYS_BYTECODE" --rpc-url "$ARB_RPC" >/dev/null
+echo "ArbSys mock deployed at 0x0000000000000000000000000000000000000064"
+
 INBOX="$(
   create contracts/src/arbitrumToEth/VeaInboxArbToEth.sol:VeaInboxArbToEth \
     "$ARB_RPC" \
