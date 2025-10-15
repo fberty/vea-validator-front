@@ -9,6 +9,7 @@ use vea_validator::{
     epoch_watcher::EpochWatcher,
     claim_handler::{ClaimHandler, ClaimAction, make_claim},
     contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis},
+    config::ValidatorConfig,
 };
 
 async fn handle_claim_action<P: alloy::providers::Provider, F, Fut>(
@@ -223,55 +224,18 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv::dotenv().ok();
+    let c = ValidatorConfig::from_env()?;
 
-    let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL")
-        .expect("ARBITRUM_RPC_URL must be set");
-
-    let private_key = std::env::var("PRIVATE_KEY")
-        .or_else(|_| std::fs::read_to_string("/run/secrets/validator_key")
-            .map(|s| s.trim().to_string()))
-        .expect("PRIVATE_KEY not set or /run/secrets/validator_key not found");
-
-    let signer = PrivateKeySigner::from_str(&private_key)?;
+    let signer = PrivateKeySigner::from_str(&c.private_key)?;
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
     println!("Validator wallet address: {}", wallet_address);
 
-    // ARB_TO_ETH route setup
-    let inbox_arb_to_eth = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_ETH")
-            .expect("VEA_INBOX_ARB_TO_ETH must be set")
-    )?;
-    let outbox_arb_to_eth = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_ETH")
-            .expect("VEA_OUTBOX_ARB_TO_ETH must be set")
-    )?;
-    let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-        .or_else(|_| std::env::var("MAINNET_RPC_URL"))
-        .expect("ETHEREUM_RPC_URL or MAINNET_RPC_URL must be set");
-
-    // ARB_TO_GNOSIS route setup
-    let inbox_arb_to_gnosis = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_GNOSIS")
-            .expect("VEA_INBOX_ARB_TO_GNOSIS must be set")
-    )?;
-    let outbox_arb_to_gnosis = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_GNOSIS")
-            .expect("VEA_OUTBOX_ARB_TO_GNOSIS must be set")
-    )?;
-    let gnosis_rpc = std::env::var("GNOSIS_RPC_URL")
-        .expect("GNOSIS_RPC_URL must be set");
-    let weth_gnosis = Address::from_str(
-        &std::env::var("WETH_GNOSIS")
-            .expect("WETH_GNOSIS must be set")
-    )?;
-
     // Bridge resolver for ARB_TO_ETH: Direct bridge via Arbitrum canonical bridge
-    let arb_rpc_for_eth = arbitrum_rpc.clone();
+    let arb_rpc_for_eth = c.arbitrum_rpc.clone();
     let wallet_for_eth = wallet.clone();
-    let inbox_addr_eth = inbox_arb_to_eth;
+    let inbox_addr_eth = c.inbox_arb_to_eth;
     let wallet_addr_eth = wallet_address;
     let arb_to_eth_resolver = move |epoch: u64, claim: ClaimEvent| {
         let rpc = arb_rpc_for_eth.clone();
@@ -317,9 +281,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bridge resolver for ARB_TO_GNOSIS: Multi-hop via router
     // Note: The snapshot needs to be sent from Arbitrum, which goes to the router on mainnet,
     // which then forwards to Gnosis via AMB. This is a 2-hop process with ~7 day delay on first hop.
-    let arb_rpc_for_gnosis = arbitrum_rpc.clone();
+    let arb_rpc_for_gnosis = c.arbitrum_rpc.clone();
     let wallet_for_gnosis = wallet.clone();
-    let inbox_addr_gnosis = inbox_arb_to_gnosis;
+    let inbox_addr_gnosis = c.inbox_arb_to_gnosis;
     let wallet_addr_gnosis = wallet_address;
     let arb_to_gnosis_resolver = move |epoch: u64, claim: ClaimEvent| {
         let rpc = arb_rpc_for_gnosis.clone();
@@ -369,10 +333,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let arb_to_eth_handle = tokio::spawn(run_validator_for_route(
         "ARB_TO_ETH",
-        inbox_arb_to_eth,
-        outbox_arb_to_eth,
-        ethereum_rpc,
-        arbitrum_rpc.clone(),
+        c.inbox_arb_to_eth,
+        c.outbox_arb_to_eth,
+        c.ethereum_rpc.clone(),
+        c.arbitrum_rpc.clone(),
         wallet.clone(),
         wallet_address,
         None, // No WETH for ARB_TO_ETH route
@@ -381,13 +345,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let arb_to_gnosis_handle = tokio::spawn(run_validator_for_route(
         "ARB_TO_GNOSIS",
-        inbox_arb_to_gnosis,
-        outbox_arb_to_gnosis,
-        gnosis_rpc,
-        arbitrum_rpc,
+        c.inbox_arb_to_gnosis,
+        c.outbox_arb_to_gnosis,
+        c.gnosis_rpc,
+        c.arbitrum_rpc,
         wallet.clone(),
         wallet_address,
-        Some(weth_gnosis), // WETH for ARB_TO_GNOSIS route
+        Some(c.weth_gnosis), // WETH for ARB_TO_GNOSIS route
         arb_to_gnosis_resolver,
     ));
 

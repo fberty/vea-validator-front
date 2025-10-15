@@ -11,6 +11,7 @@ use vea_validator::{
     contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH},
     event_listener::{EventListener, ClaimEvent},
     claim_handler::ClaimHandler,
+    config::ValidatorConfig,
 };
 
 // Test fixture
@@ -80,39 +81,23 @@ async fn advance_time<P: Provider>(provider: &P, seconds: u64) {
 #[tokio::test]
 #[serial]
 async fn test_validator_detects_and_challenges_wrong_claim() {
-    dotenv::dotenv().ok();
-
     println!("\n==============================================");
     println!("VALIDATOR INTEGRATION TEST: Wrong Claim Detection");
     println!("==============================================\n");
 
-    // Setup
-    let inbox_address = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_ETH").expect("VEA_INBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid inbox address");
+    // Setup - use centralized config
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let outbox_address = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_ETH").expect("VEA_OUTBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid outbox address");
-
-    let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL").expect("ARBITRUM_RPC_URL must be set");
-    let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-        .or_else(|_| std::env::var("MAINNET_RPC_URL"))
-        .expect("ETHEREUM_RPC_URL or MAINNET_RPC_URL must be set");
-
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
-    let ethereum_provider = ProviderBuilder::new().connect_http(ethereum_rpc.parse().unwrap());
+    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
     let ethereum_provider = Arc::new(ethereum_provider);
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse().unwrap());
+    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
     let arbitrum_provider = Arc::new(arbitrum_provider);
 
     let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
 
-    let signer = PrivateKeySigner::from_str(&private_key).unwrap();
+    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
@@ -128,8 +113,8 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
 
     // STEP 1: Setup - create an epoch with messages and snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(inbox_address, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(outbox_address, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -174,8 +159,8 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
     let claim_handler = Arc::new(ClaimHandler::new(
         ethereum_with_wallet.clone(),
         arbitrum_with_wallet.clone(),
-        outbox_address,
-        inbox_address,
+        c.outbox_arb_to_eth,
+        c.inbox_arb_to_eth,
         wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
@@ -183,7 +168,7 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
     // Create event listener for claims
     let event_listener = EventListener::new(
         ethereum_provider.clone(),
-        outbox_address,
+        c.outbox_arb_to_eth,
     );
 
     // Flag to track if validator challenged
@@ -270,39 +255,23 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
 #[tokio::test]
 #[serial]
 async fn test_validator_triggers_bridge_resolution() {
-    dotenv::dotenv().ok();
-
     println!("\n==============================================");
     println!("VALIDATOR INTEGRATION TEST: Bridge Resolution");
     println!("==============================================\n");
 
-    // Setup (same as above)
-    let inbox_address = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_ETH").expect("VEA_INBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid inbox address");
+    // Setup - use centralized config
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let outbox_address = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_ETH").expect("VEA_OUTBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid outbox address");
-
-    let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL").expect("ARBITRUM_RPC_URL must be set");
-    let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-        .or_else(|_| std::env::var("MAINNET_RPC_URL"))
-        .expect("ETHEREUM_RPC_URL or MAINNET_RPC_URL must be set");
-
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
-    let ethereum_provider = ProviderBuilder::new().connect_http(ethereum_rpc.parse().unwrap());
+    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
     let ethereum_provider = Arc::new(ethereum_provider);
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse().unwrap());
+    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
     let arbitrum_provider = Arc::new(arbitrum_provider);
 
     let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
 
-    let signer = PrivateKeySigner::from_str(&private_key).unwrap();
+    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
@@ -318,8 +287,8 @@ async fn test_validator_triggers_bridge_resolution() {
 
     // Setup epoch with snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(inbox_address, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(outbox_address, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -358,9 +327,9 @@ async fn test_validator_triggers_bridge_resolution() {
 
     // Create the bridge resolver (from main.rs)
     println!("\n--- Creating Bridge Resolver (from main.rs) ---");
-    let arb_rpc_clone = arbitrum_rpc.clone();
+    let arb_rpc_clone = c.arbitrum_rpc.clone();
     let wallet_clone = wallet.clone();
-    let inbox_addr = inbox_address;
+    let inbox_addr = c.inbox_arb_to_eth;
     let wallet_addr = wallet_address;
 
     let bridge_resolver_called = Arc::new(AtomicBool::new(false));
@@ -413,15 +382,15 @@ async fn test_validator_triggers_bridge_resolution() {
     let claim_handler = Arc::new(ClaimHandler::new(
         ethereum_with_wallet.clone(),
         arbitrum_with_wallet.clone(),
-        outbox_address,
-        inbox_address,
+        c.outbox_arb_to_eth,
+        c.inbox_arb_to_eth,
         wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
 
     let event_listener = EventListener::new(
         ethereum_provider.clone(),
-        outbox_address,
+        c.outbox_arb_to_eth,
     );
 
     // Watch for claims and trigger bridge resolution
@@ -501,37 +470,23 @@ async fn test_validator_triggers_bridge_resolution() {
 #[tokio::test]
 #[serial]
 async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
-    dotenv::dotenv().ok();
-
     println!("\n====================================================");
     println!("VALIDATOR INTEGRATION TEST: ARB → GNOSIS Route");
     println!("====================================================\n");
 
-    // Setup
-    let inbox_address = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_GNOSIS").expect("VEA_INBOX_ARB_TO_GNOSIS must be set")
-    ).expect("Invalid inbox address");
+    // Setup - use centralized config
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let outbox_address = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_GNOSIS").expect("VEA_OUTBOX_ARB_TO_GNOSIS must be set")
-    ).expect("Invalid outbox address");
-
-    let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL").expect("ARBITRUM_RPC_URL must be set");
-    let gnosis_rpc = std::env::var("GNOSIS_RPC_URL").expect("GNOSIS_RPC_URL must be set");
-
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
-    let gnosis_provider = ProviderBuilder::new().connect_http(gnosis_rpc.parse().unwrap());
+    let gnosis_provider = ProviderBuilder::new().connect_http(c.gnosis_rpc.parse().unwrap());
     let gnosis_provider = Arc::new(gnosis_provider);
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse().unwrap());
+    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
     let arbitrum_provider = Arc::new(arbitrum_provider);
 
     let mut fixture = TestFixture::new(gnosis_provider.clone(), arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
 
-    let signer = PrivateKeySigner::from_str(&private_key).unwrap();
+    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
@@ -547,8 +502,8 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
 
     // STEP 1: Setup - create an epoch with messages and snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToGnosis::new(inbox_address, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToGnosis::new(outbox_address, gnosis_with_wallet.clone());
+    let inbox = IVeaInboxArbToGnosis::new(c.inbox_arb_to_gnosis, arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, gnosis_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -589,14 +544,12 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
 
     // STEP 2: Setup WETH approval for validator (Gnosis uses WETH for deposits)
     println!("\n--- Setting up WETH for validator ---");
-    let weth_address = Address::from_str(&std::env::var("WETH_GNOSIS").expect("WETH_GNOSIS must be set"))
-        .expect("Invalid WETH address");
-    let weth = IWETH::new(weth_address, gnosis_with_wallet.clone());
+    let weth = IWETH::new(c.weth_gnosis, gnosis_with_wallet.clone());
 
     let deposit = outbox.deposit().call().await.unwrap();
     // Mint and approve enough WETH for validator to make claims AND challenges
     weth.mintMock(wallet_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
-    weth.approve(outbox_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
+    weth.approve(c.outbox_arb_to_gnosis, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
     println!("✓ WETH minted and approved for validator");
 
     // STEP 3: Create the ClaimHandler (this is what the validator uses)
@@ -604,16 +557,16 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
     let claim_handler = Arc::new(ClaimHandler::new(
         gnosis_with_wallet.clone(),
         arbitrum_with_wallet.clone(),
-        outbox_address,
-        inbox_address,
+        c.outbox_arb_to_gnosis,
+        c.inbox_arb_to_gnosis,
         wallet_address,
-        Some(weth_address), // WETH for ARB_TO_GNOSIS route
+        Some(c.weth_gnosis), // WETH for ARB_TO_GNOSIS route
     ));
 
     // Create event listener for claims on Gnosis
     let event_listener = EventListener::new(
         gnosis_provider.clone(),
-        outbox_address,
+        c.outbox_arb_to_gnosis,
     );
 
     // Flag to track if validator challenged
@@ -697,8 +650,6 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
 #[tokio::test]
 #[serial]
 async fn test_validator_startup_sync_detects_incorrect_claim() {
-    dotenv::dotenv().ok();
-
     println!("\n==========================================================");
     println!("VALIDATOR INTEGRATION TEST: Startup Sync Challenge");
     println!("==========================================================\n");
@@ -708,33 +659,19 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     // 2. Verifies each synced claim
     // 3. Challenges any incorrect claims it finds
 
-    // Setup
-    let inbox_address = Address::from_str(
-        &std::env::var("VEA_INBOX_ARB_TO_ETH").expect("VEA_INBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid inbox address");
+    // Setup - use centralized config
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let outbox_address = Address::from_str(
-        &std::env::var("VEA_OUTBOX_ARB_TO_ETH").expect("VEA_OUTBOX_ARB_TO_ETH must be set")
-    ).expect("Invalid outbox address");
-
-    let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL").expect("ARBITRUM_RPC_URL must be set");
-    let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-        .or_else(|_| std::env::var("MAINNET_RPC_URL"))
-        .expect("ETHEREUM_RPC_URL or MAINNET_RPC_URL must be set");
-
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
-    let ethereum_provider = ProviderBuilder::new().connect_http(ethereum_rpc.parse().unwrap());
+    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
     let ethereum_provider = Arc::new(ethereum_provider);
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse().unwrap());
+    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
     let arbitrum_provider = Arc::new(arbitrum_provider);
 
     let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
 
-    let signer = PrivateKeySigner::from_str(&private_key).unwrap();
+    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
@@ -750,8 +687,8 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
 
     // STEP 1: Create epoch with snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(inbox_address, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(outbox_address, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -810,8 +747,8 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     let claim_handler = Arc::new(ClaimHandler::new(
         ethereum_with_wallet.clone(),
         arbitrum_with_wallet.clone(),
-        outbox_address,
-        inbox_address,
+        c.outbox_arb_to_eth,
+        c.inbox_arb_to_eth,
         wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
