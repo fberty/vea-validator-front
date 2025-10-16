@@ -1,7 +1,6 @@
 use alloy::primitives::{Address, FixedBytes, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
-use alloy::network::{Ethereum, EthereumWallet};
+use alloy::network::Ethereum;
 use serial_test::serial;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -88,33 +87,15 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
     // Setup - use centralized config
     let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
-    let ethereum_provider = Arc::new(ethereum_provider);
+    let providers = c.setup_arb_to_eth().expect("Failed to setup providers");
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
-    let arbitrum_provider = Arc::new(arbitrum_provider);
-
-    let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
+    let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
-
-    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
-    let wallet_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
-
-    let ethereum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(ethereum_provider.clone());
-    let ethereum_with_wallet = Arc::new(ethereum_with_wallet);
-
-    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(arbitrum_provider.clone());
-    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
 
     // STEP 1: Setup - create an epoch with messages and snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, providers.arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, providers.destination_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -138,36 +119,36 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
     println!("✓ Saved snapshot for epoch {} with correct root: {:?}", current_epoch, correct_root);
 
     // Advance time so epoch can be claimed
-    advance_time(arbitrum_provider.as_ref(), epoch_period + 10).await;
-    advance_time(ethereum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.destination_provider.as_ref(), epoch_period + 10).await;
 
     let target_epoch = current_epoch;
 
     // Sync ethereum time to make the epoch claimable
     // Outbox requires: _epoch == block.timestamp / epochPeriod - 1
-    let eth_block = ethereum_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let eth_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let eth_timestamp = eth_block.header.timestamp;
     let target_timestamp = (target_epoch + 1) * epoch_period + 10;
     let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
     if advance_amount > 0 {
         println!("Syncing Ethereum time (advancing {} seconds)", advance_amount);
-        advance_time(ethereum_provider.as_ref(), advance_amount).await;
+        advance_time(providers.destination_provider.as_ref(), advance_amount).await;
     }
 
     // STEP 2: Create the ClaimHandler (this is what the validator uses)
     println!("\n--- Starting Validator Components ---");
     let claim_handler = Arc::new(ClaimHandler::new(
-        ethereum_with_wallet.clone(),
-        arbitrum_with_wallet.clone(),
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
         c.outbox_arb_to_eth,
         c.inbox_arb_to_eth,
-        wallet_address,
+        providers.wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
 
     // Create event listener for claims
     let event_listener = EventListener::new(
-        ethereum_provider.clone(),
+        providers.destination_provider.clone(),
         c.outbox_arb_to_eth,
     );
 
@@ -262,33 +243,16 @@ async fn test_validator_triggers_bridge_resolution() {
     // Setup - use centralized config
     let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
-    let ethereum_provider = Arc::new(ethereum_provider);
+    let providers =
+        c.setup_arb_to_eth().expect("Failed to setup providers");
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
-    let arbitrum_provider = Arc::new(arbitrum_provider);
-
-    let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
+    let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
-
-    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
-    let wallet_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
-
-    let ethereum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(ethereum_provider.clone());
-    let ethereum_with_wallet = Arc::new(ethereum_with_wallet);
-
-    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(arbitrum_provider.clone());
-    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
 
     // Setup epoch with snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, providers.arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, providers.destination_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -310,27 +274,27 @@ async fn test_validator_triggers_bridge_resolution() {
 
     println!("✓ Saved snapshot for epoch {}", current_epoch);
 
-    advance_time(arbitrum_provider.as_ref(), epoch_period + 10).await;
-    advance_time(ethereum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.destination_provider.as_ref(), epoch_period + 10).await;
 
     let target_epoch = current_epoch;
 
     // Sync ethereum time
-    let eth_block = ethereum_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let eth_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let eth_timestamp = eth_block.header.timestamp;
     let target_timestamp = (target_epoch + 1) * epoch_period + 10;
     let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
     if advance_amount > 0 {
         println!("Syncing Ethereum time (advancing {} seconds)", advance_amount);
-        advance_time(ethereum_provider.as_ref(), advance_amount).await;
+        advance_time(providers.destination_provider.as_ref(), advance_amount).await;
     }
 
     // Create the bridge resolver (from main.rs)
     println!("\n--- Creating Bridge Resolver (from main.rs) ---");
     let arb_rpc_clone = c.arbitrum_rpc.clone();
-    let wallet_clone = wallet.clone();
+    let wallet_clone = providers.wallet.clone();
     let inbox_addr = c.inbox_arb_to_eth;
-    let wallet_addr = wallet_address;
+    let wallet_addr = providers.wallet_address;
 
     let bridge_resolver_called = Arc::new(AtomicBool::new(false));
     let bridge_flag = bridge_resolver_called.clone();
@@ -380,16 +344,16 @@ async fn test_validator_triggers_bridge_resolution() {
 
     // Create claim handler with bridge resolver
     let claim_handler = Arc::new(ClaimHandler::new(
-        ethereum_with_wallet.clone(),
-        arbitrum_with_wallet.clone(),
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
         c.outbox_arb_to_eth,
         c.inbox_arb_to_eth,
-        wallet_address,
+        providers.wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
 
     let event_listener = EventListener::new(
-        ethereum_provider.clone(),
+        providers.destination_provider.clone(),
         c.outbox_arb_to_eth,
     );
 
@@ -477,33 +441,16 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
     // Setup - use centralized config
     let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let gnosis_provider = ProviderBuilder::new().connect_http(c.gnosis_rpc.parse().unwrap());
-    let gnosis_provider = Arc::new(gnosis_provider);
+    let providers =
+        c.setup_arb_to_gnosis().expect("Failed to setup providers");
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
-    let arbitrum_provider = Arc::new(arbitrum_provider);
-
-    let mut fixture = TestFixture::new(gnosis_provider.clone(), arbitrum_provider.clone());
+    let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
-
-    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
-    let wallet_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
-
-    let gnosis_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(gnosis_provider.clone());
-    let gnosis_with_wallet = Arc::new(gnosis_with_wallet);
-
-    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet)
-        .connect_provider(arbitrum_provider.clone());
-    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
 
     // STEP 1: Setup - create an epoch with messages and snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToGnosis::new(c.inbox_arb_to_gnosis, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, gnosis_with_wallet.clone());
+    let inbox = IVeaInboxArbToGnosis::new(c.inbox_arb_to_gnosis, providers.arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, providers.destination_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -527,45 +474,45 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
     println!("✓ Saved snapshot for epoch {} with correct root: {:?}", current_epoch, correct_root);
 
     // Advance time so epoch can be claimed
-    advance_time(arbitrum_provider.as_ref(), epoch_period + 10).await;
-    advance_time(gnosis_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.destination_provider.as_ref(), epoch_period + 10).await;
 
     let target_epoch = current_epoch;
 
     // Sync gnosis time to make the epoch claimable
-    let gnosis_block = gnosis_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let gnosis_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let gnosis_timestamp = gnosis_block.header.timestamp;
     let target_timestamp = (target_epoch + 1) * epoch_period + 10;
     let advance_amount = target_timestamp.saturating_sub(gnosis_timestamp);
     if advance_amount > 0 {
         println!("Syncing Gnosis time (advancing {} seconds)", advance_amount);
-        advance_time(gnosis_provider.as_ref(), advance_amount).await;
+        advance_time(providers.destination_provider.as_ref(), advance_amount).await;
     }
 
     // STEP 2: Setup WETH approval for validator (Gnosis uses WETH for deposits)
     println!("\n--- Setting up WETH for validator ---");
-    let weth = IWETH::new(c.weth_gnosis, gnosis_with_wallet.clone());
+    let weth = IWETH::new(c.weth_gnosis, providers.destination_with_wallet.clone());
 
     let deposit = outbox.deposit().call().await.unwrap();
     // Mint and approve enough WETH for validator to make claims AND challenges
-    weth.mintMock(wallet_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
+    weth.mintMock(providers.wallet_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
     weth.approve(c.outbox_arb_to_gnosis, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
     println!("✓ WETH minted and approved for validator");
 
     // STEP 3: Create the ClaimHandler (this is what the validator uses)
     println!("\n--- Starting Validator Components ---");
     let claim_handler = Arc::new(ClaimHandler::new(
-        gnosis_with_wallet.clone(),
-        arbitrum_with_wallet.clone(),
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
         c.outbox_arb_to_gnosis,
         c.inbox_arb_to_gnosis,
-        wallet_address,
+        providers.wallet_address,
         Some(c.weth_gnosis), // WETH for ARB_TO_GNOSIS route
     ));
 
     // Create event listener for claims on Gnosis
     let event_listener = EventListener::new(
-        gnosis_provider.clone(),
+        providers.destination_provider.clone(),
         c.outbox_arb_to_gnosis,
     );
 
@@ -662,33 +609,16 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     // Setup - use centralized config
     let c = ValidatorConfig::from_env().expect("Failed to load config");
 
-    let ethereum_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse().unwrap());
-    let ethereum_provider = Arc::new(ethereum_provider);
+    let providers =
+        c.setup_arb_to_eth().expect("Failed to setup providers");
 
-    let arbitrum_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse().unwrap());
-    let arbitrum_provider = Arc::new(arbitrum_provider);
-
-    let mut fixture = TestFixture::new(ethereum_provider.clone(), arbitrum_provider.clone());
+    let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
-
-    let signer = PrivateKeySigner::from_str(&c.private_key).unwrap();
-    let wallet_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
-
-    let ethereum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(ethereum_provider.clone());
-    let ethereum_with_wallet = Arc::new(ethereum_with_wallet);
-
-    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(arbitrum_provider.clone());
-    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
 
     // STEP 1: Create epoch with snapshot
     println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, arbitrum_with_wallet.clone());
-    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, ethereum_with_wallet.clone());
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, providers.arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, providers.destination_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
@@ -712,19 +642,19 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     println!("✓ Saved snapshot for epoch {} with correct root: {:?}", current_epoch, correct_root);
 
     // Advance time so epoch can be claimed
-    advance_time(arbitrum_provider.as_ref(), epoch_period + 10).await;
-    advance_time(ethereum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 10).await;
+    advance_time(providers.destination_provider.as_ref(), epoch_period + 10).await;
 
     let target_epoch = current_epoch;
 
     // Sync ethereum time
-    let eth_block = ethereum_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let eth_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let eth_timestamp = eth_block.header.timestamp;
     let target_timestamp = (target_epoch + 1) * epoch_period + 10;
     let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
     if advance_amount > 0 {
         println!("Syncing Ethereum time (advancing {} seconds)", advance_amount);
-        advance_time(ethereum_provider.as_ref(), advance_amount).await;
+        advance_time(providers.destination_provider.as_ref(), advance_amount).await;
     }
 
     // STEP 2: Malicious claim is made BEFORE validator starts (simulating downtime)
@@ -745,11 +675,11 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     // STEP 3: Now validator starts up and syncs (using REAL validator code)
     println!("\n--- VALIDATOR STARTUP: Syncing existing claims ---");
     let claim_handler = Arc::new(ClaimHandler::new(
-        ethereum_with_wallet.clone(),
-        arbitrum_with_wallet.clone(),
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
         c.outbox_arb_to_eth,
         c.inbox_arb_to_eth,
-        wallet_address,
+        providers.wallet_address,
         None, // No WETH for ARB_TO_ETH route
     ));
 

@@ -75,27 +75,11 @@ where
     F: Fn(u64, ClaimEvent) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
 {
-    let destination_provider = ProviderBuilder::new()
-        .connect_http(destination_rpc.parse()?);
-    let destination_provider = Arc::new(destination_provider);
-
-    let arbitrum_provider = ProviderBuilder::new()
-        .connect_http(arbitrum_rpc.parse()?);
-    let arbitrum_provider = Arc::new(arbitrum_provider);
-
-    let destination_provider_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet.clone())
-        .connect_provider(destination_provider.clone());
-    let destination_provider_with_wallet = Arc::new(destination_provider_with_wallet);
-
-    let arbitrum_provider_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
-        .wallet(wallet)
-        .connect_provider(arbitrum_provider.clone());
-    let arbitrum_provider_with_wallet = Arc::new(arbitrum_provider_with_wallet);
+    let providers = vea_validator::config::setup_providers(destination_rpc.clone(), arbitrum_rpc.clone(), wallet)?;
 
     let claim_handler = Arc::new(ClaimHandler::new(
-        destination_provider_with_wallet.clone(),
-        arbitrum_provider_with_wallet.clone(),
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
         outbox_address,
         inbox_address,
         wallet_address,
@@ -103,20 +87,20 @@ where
     ));
 
     let event_listener_inbox = EventListener::new(
-        arbitrum_provider.clone(),
+        providers.arbitrum_provider.clone(),
         inbox_address,
     );
 
     let event_listener_outbox = EventListener::new(
-        destination_provider.clone(),
+        providers.destination_provider.clone(),
         outbox_address,
     );
 
     let epoch_watcher = EpochWatcher::new(
-        arbitrum_provider.clone(),
+        providers.arbitrum_provider.clone(),
     );
 
-    let inbox_contract = IVeaInboxArbToEth::new(inbox_address, arbitrum_provider.clone());
+    let inbox_contract = IVeaInboxArbToEth::new(inbox_address, providers.arbitrum_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
 
     let current_epoch: u64 = inbox_contract.epochFinalized().call().await?.try_into()?;

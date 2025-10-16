@@ -1,5 +1,9 @@
 use alloy::primitives::Address;
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::signers::local::PrivateKeySigner;
+use alloy::network::{Ethereum, EthereumWallet};
 use std::str::FromStr;
+use std::sync::Arc;
 
 pub struct ValidatorConfig {
     pub arbitrum_rpc: String,
@@ -69,4 +73,119 @@ impl ValidatorConfig {
             weth_gnosis,
         })
     }
+
+    /// Creates a complete provider setup for ARB_TO_ETH route.
+    ///
+    /// This ensures tests and production use identical provider creation logic.
+    pub fn setup_arb_to_eth(&self) -> Result<
+        ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
+        Box<dyn std::error::Error + Send + Sync>
+    > {
+        setup_providers_with_wallet(self.ethereum_rpc.clone(), self.arbitrum_rpc.clone(), self.private_key.clone())
+    }
+
+    /// Creates a complete provider setup for ARB_TO_GNOSIS route.
+    ///
+    /// This ensures tests and production use identical provider creation logic.
+    pub fn setup_arb_to_gnosis(&self) -> Result<
+        ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
+        Box<dyn std::error::Error + Send + Sync>
+    > {
+        setup_providers_with_wallet(self.gnosis_rpc.clone(), self.arbitrum_rpc.clone(), self.private_key.clone())
+    }
+}
+
+/// Holds providers and wallet for validator setup.
+pub struct ProvidersWithWallet<P1, P2> {
+    pub destination_provider: Arc<P1>,
+    pub arbitrum_provider: Arc<P1>,
+    pub destination_with_wallet: Arc<P2>,
+    pub arbitrum_with_wallet: Arc<P2>,
+    pub wallet: EthereumWallet,
+    pub wallet_address: Address,
+}
+
+/// Creates providers and wallet from scratch (used in tests and convenience methods).
+///
+/// This is the single source of truth for provider creation, ensuring tests and production
+/// use identical setup logic.
+pub fn setup_providers_with_wallet(
+    destination_rpc: String,
+    arbitrum_rpc: String,
+    private_key: String,
+) -> Result<
+    ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
+    Box<dyn std::error::Error + Send + Sync>
+> {
+    let destination_provider = ProviderBuilder::new().connect_http(destination_rpc.parse()?);
+    let destination_provider = Arc::new(destination_provider);
+
+    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse()?);
+    let arbitrum_provider = Arc::new(arbitrum_provider);
+
+    let signer = PrivateKeySigner::from_str(&private_key)?;
+    let wallet_address = signer.address();
+    let wallet = EthereumWallet::from(signer);
+
+    let destination_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
+        .wallet(wallet.clone())
+        .connect_provider(destination_provider.clone());
+    let destination_with_wallet = Arc::new(destination_with_wallet);
+
+    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
+        .wallet(wallet.clone())
+        .connect_provider(arbitrum_provider.clone());
+    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
+
+    Ok(ProvidersWithWallet {
+        destination_provider,
+        arbitrum_provider,
+        destination_with_wallet,
+        arbitrum_with_wallet,
+        wallet,
+        wallet_address,
+    })
+}
+
+/// Holds providers for validator setup (without wallet creation) - used in main.rs.
+pub struct Providers<P1, P2> {
+    pub destination_provider: Arc<P1>,
+    pub arbitrum_provider: Arc<P1>,
+    pub destination_with_wallet: Arc<P2>,
+    pub arbitrum_with_wallet: Arc<P2>,
+}
+
+/// Creates providers from an existing wallet (used in main.rs).
+///
+/// This allows main.rs to create the wallet once and reuse it for multiple routes.
+pub fn setup_providers(
+    destination_rpc: String,
+    arbitrum_rpc: String,
+    wallet: EthereumWallet,
+) -> Result<
+    Providers<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
+    Box<dyn std::error::Error + Send + Sync>
+> {
+    let destination_provider = ProviderBuilder::new().connect_http(destination_rpc.parse()?);
+    let destination_provider = Arc::new(destination_provider);
+
+    let arbitrum_provider = ProviderBuilder::new().connect_http(arbitrum_rpc.parse()?);
+    let arbitrum_provider = Arc::new(arbitrum_provider);
+
+    let destination_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
+        .wallet(wallet.clone())
+        .connect_provider(destination_provider.clone());
+    let destination_with_wallet = Arc::new(destination_with_wallet);
+
+    let arbitrum_with_wallet = ProviderBuilder::<_, _, Ethereum>::new()
+        .wallet(wallet)
+        .connect_provider(arbitrum_provider.clone());
+    let arbitrum_with_wallet = Arc::new(arbitrum_with_wallet);
+
+    Ok(Providers {
+        destination_provider,
+        arbitrum_provider,
+        destination_with_wallet,
+        arbitrum_with_wallet,
+    })
 }
