@@ -684,16 +684,18 @@ async fn test_validator_startup_sync_detects_incorrect_claim() {
     ));
 
     let current_epoch_on_startup: u64 = inbox.epochFinalized().call().await.unwrap().try_into().unwrap();
-    let sync_from = current_epoch_on_startup.saturating_sub(10);
+    // Only sync the target epoch to avoid pollution from other tests
+    let sync_from = target_epoch;
+    let sync_to = target_epoch;
 
     println!("Current epoch: {}", current_epoch_on_startup);
-    println!("Syncing claims from epoch {} to {}", sync_from, current_epoch_on_startup);
+    println!("Syncing claims from epoch {} to {}", sync_from, sync_to);
 
     // STEP 4: Call the REAL startup_sync_and_verify function from claim_handler
     // This is the exact same function that main.rs calls on startup
     println!("\n--- STARTUP VERIFICATION: Using REAL validator startup logic ---");
 
-    let startup_actions = claim_handler.startup_sync_and_verify(sync_from, current_epoch_on_startup).await
+    let startup_actions = claim_handler.startup_sync_and_verify(sync_from, sync_to).await
         .expect("Failed to sync and verify claims");
 
     println!("✓ Startup sync complete, found {} actions to take", startup_actions.len());
@@ -758,14 +760,12 @@ async fn test_validator_makes_honest_claim_when_epoch_ends() {
     let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
     fixture.take_snapshots().await.unwrap();
 
-    // STEP 1: Send messages during an epoch (but DON'T save snapshot - let validator do it)
-    println!("--- SETUP: Creating epoch with messages ---");
+    // STEP 1: Send messages in current epoch
     let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, providers.arbitrum_with_wallet.clone());
     let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, providers.destination_with_wallet.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
 
-    // Send some messages in the current epoch
     for i in 0..3 {
         let test_message = alloy::primitives::Bytes::from(vec![0xDE, 0xAD, 0xBE, 0xEF, i]);
         inbox.sendMessage(
@@ -776,17 +776,7 @@ async fn test_validator_makes_honest_claim_when_epoch_ends() {
 
     let starting_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
 
-    // Save snapshot DURING the epoch (realistic - someone calls saveSnapshot before epoch ends)
-    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let expected_root = inbox.snapshots(U256::from(starting_epoch)).call().await.unwrap();
-
-    println!("✓ Sent 3 messages in epoch {}", starting_epoch);
-    println!("✓ Snapshot saved with root: {:?}", expected_root);
-    println!("  (Simulating realistic scenario where snapshot exists before epoch ends)");
-
-    // STEP 2: Start the REAL validator components (EpochWatcher + ClaimHandler)
-    println!("\n--- Starting Validator with REAL EpochWatcher ---");
-
+    // STEP 2: Start validator BEFORE epoch ends
     let claim_handler = Arc::new(ClaimHandler::new(
         providers.destination_with_wallet.clone(),
         providers.arbitrum_with_wallet.clone(),
@@ -808,57 +798,44 @@ async fn test_validator_makes_honest_claim_when_epoch_ends() {
     let epoch_ref = claimed_epoch.clone();
     let root_ref = claimed_root.clone();
 
-    // Start EpochWatcher (this is what main.rs does)
-    let claim_handler_clone = claim_handler.clone();
+    let claim_handler_epoch = claim_handler.clone();
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period, move |epoch| {
-            let handler = claim_handler_clone.clone();
+            let handler = claim_handler_epoch.clone();
+            Box::pin(async move {
+                handler.handle_epoch_end(epoch).await.expect("Failed to save snapshot");
+                Ok(())
+            })
+        }).await
+    });
+
+    use vea_validator::event_listener::{EventListener, SnapshotEvent};
+    let event_listener = EventListener::new(providers.arbitrum_provider.clone(), c.inbox_arb_to_eth);
+    let claim_handler_snapshot = claim_handler.clone();
+    let snapshot_handle = tokio::spawn(async move {
+        event_listener.watch_snapshots(move |event: SnapshotEvent| {
+            let handler = claim_handler_snapshot.clone();
             let flag = claim_flag.clone();
             let epoch_ref = epoch_ref.clone();
             let root_ref = root_ref.clone();
             Box::pin(async move {
-                println!("📡 EpochWatcher detected epoch {} ended!", epoch);
-
-                // This is the REAL validator logic from main.rs
-                let action = handler.handle_epoch_end(epoch).await
-                    .expect("Failed to handle epoch end");
-
-                match action {
-                    vea_validator::claim_handler::ClaimAction::Claim { epoch, state_root } => {
-                        println!("✓ Validator decided to make claim for epoch {}", epoch);
-                        println!("  State root: {:?}", state_root);
-
-                        // Submit the claim
-                        if let Err(e) = handler.submit_claim(epoch, state_root).await {
-                            eprintln!("❌ Failed to submit claim: {}", e);
-                        } else {
-                            println!("✓ Validator submitted claim successfully");
-                            flag.store(true, Ordering::SeqCst);
-                            *epoch_ref.write().unwrap() = Some(epoch);
-                            *root_ref.write().unwrap() = Some(state_root);
-                        }
-                    }
-                    vea_validator::claim_handler::ClaimAction::None => {
-                        println!("ℹ️  Validator decided no action needed for epoch {}", epoch);
-                    }
-                    vea_validator::claim_handler::ClaimAction::Challenge { .. } => {
-                        println!("⚔️  Validator decided to challenge epoch {}", epoch);
-                    }
+                if let Err(e) = handler.submit_claim(event.epoch, event.state_root).await {
+                    eprintln!("Failed to submit claim: {}", e);
+                } else {
+                    flag.store(true, Ordering::SeqCst);
+                    *epoch_ref.write().unwrap() = Some(event.epoch);
+                    *root_ref.write().unwrap() = Some(event.state_root);
                 }
                 Ok(())
             })
         }).await
     });
 
-    // Give the watcher time to start
     tokio::time::sleep(Duration::from_millis(500)).await;
-    println!("✓ Validator started and watching for epoch changes");
 
-    // STEP 3: Advance time to trigger epoch change (this is the EVENT the validator reacts to)
-    println!("\n--- Advancing time to end epoch {} ---", starting_epoch);
+    // STEP 3: Advance time to end epoch
     advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 10).await;
 
-    // Also advance destination chain time so epoch is claimable
     let eth_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let eth_timestamp = eth_block.header.timestamp;
     let target_timestamp = (starting_epoch + 1) * epoch_period + 10;
@@ -867,69 +844,38 @@ async fn test_validator_makes_honest_claim_when_epoch_ends() {
         advance_time(providers.destination_provider.as_ref(), advance_amount).await;
     }
 
-    println!("✓ Time advanced - epoch {} should now be complete", starting_epoch);
-    println!("  Current epoch should now be {}", starting_epoch + 1);
+    // STEP 4: Wait for validator to react
 
-    // STEP 4: Wait for validator to REACT (it polls every 10 seconds, but we need to give it time)
-    println!("\n--- Waiting for validator to detect and react to epoch change... ---");
-
-    let result = timeout(Duration::from_secs(15), async {
+    let result = timeout(Duration::from_secs(30), async {
         while !claim_made.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await;
 
     watcher_handle.abort();
+    snapshot_handle.abort();
 
-    // STEP 5: Verify the validator's reactive behavior
-    if result.is_err() {
-        panic!("❌ VALIDATOR FAILED: Did not react to epoch change within 15 seconds");
-    }
+    assert!(result.is_ok(), "Validator should have reacted within 15 seconds");
 
-    println!("✓ Validator detected epoch change and made a claim!");
-
-    // Verify what epoch was claimed
     let claimed_ep = claimed_epoch.read().unwrap().expect("Should have claimed an epoch");
-    assert_eq!(claimed_ep, starting_epoch, "Validator should claim the epoch that just ended");
-    println!("✓ Validator claimed the correct epoch: {}", claimed_ep);
+    let expected_epoch = starting_epoch + 1;
+    assert_eq!(claimed_ep, expected_epoch);
 
-    // Verify the claim is on-chain
-    println!("\n--- Verifying On-Chain State ---");
-    let claim_hash = outbox.claimHashes(U256::from(starting_epoch)).call().await.unwrap();
+    let claim_hash = outbox.claimHashes(U256::from(expected_epoch)).call().await.unwrap();
     assert_ne!(claim_hash, FixedBytes::<32>::ZERO, "Claim should exist on-chain");
-    println!("✓ Claim exists on-chain with hash: {:?}", claim_hash);
 
-    // Verify the snapshot was saved by the validator
-    let snapshot_root = inbox.snapshots(U256::from(starting_epoch)).call().await.unwrap();
+    let snapshot_root = inbox.snapshots(U256::from(expected_epoch)).call().await.unwrap();
     assert_ne!(snapshot_root, FixedBytes::<32>::ZERO, "Validator should have saved snapshot");
-    println!("✓ Validator saved snapshot with root: {:?}", snapshot_root);
 
-    // Verify the claimed root matches the expected snapshot
     let claimed_rt = claimed_root.read().unwrap().expect("Should have claimed a root");
-    assert_eq!(claimed_rt, expected_root, "Claimed root should match expected snapshot");
-    assert_eq!(claimed_rt, snapshot_root, "Claimed root should match on-chain snapshot");
-    println!("✓ Claimed root matches snapshot root");
+    assert_eq!(claimed_rt, snapshot_root);
 
-    // Verify claim details
-    let stored_claim = claim_handler.get_claim_for_epoch(starting_epoch).await
+    let stored_claim = claim_handler.get_claim_for_epoch(expected_epoch).await
         .expect("Failed to get claim")
         .expect("Claim should exist");
 
-    assert_eq!(stored_claim.state_root, snapshot_root, "Stored claim should have correct root");
-    assert_eq!(stored_claim.claimer, providers.wallet_address, "Claimer should be our validator");
-    println!("✓ Claim details verified: claimer={}, root={:?}", stored_claim.claimer, stored_claim.state_root);
-
-    println!("\n✅✅✅ HONEST CLAIM TEST PASSED! ✅✅✅");
-    println!("The validator REACTIVELY:");
-    println!("  1. Watched for epoch changes via EpochWatcher (polling every 10s)");
-    println!("  2. Detected when epoch {} ended", starting_epoch);
-    println!("  3. Found the existing snapshot (saved before epoch ended)");
-    println!("  4. Made an honest claim with the correct root");
-    println!("  5. Submitted the claim to the outbox on-chain");
-    println!("\nThis proves the validator's OPTIMISTIC PATH works!");
-    println!("This is NOT a test of individual functions - this tests REACTIVE BEHAVIOR.");
-    println!("\nNote: In production, snapshots must be saved BEFORE epochs end.");
-    println!("The validator currently relies on snapshots existing (saved by others or separate process).");
+    assert_eq!(stored_claim.state_root, snapshot_root);
+    assert_eq!(stored_claim.claimer, providers.wallet_address);
 
     fixture.revert_snapshots().await.unwrap();
 }

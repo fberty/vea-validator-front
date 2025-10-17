@@ -157,17 +157,13 @@ where
 
     let claim_handler_for_epoch = claim_handler.clone();
     let route_epoch = route_name.to_string();
-    let bridge_resolver_epoch = bridge_resolver.clone();
     let epoch_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period, move |epoch| {
             let handler = claim_handler_for_epoch.clone();
             let route = route_epoch.clone();
-            let resolver = bridge_resolver_epoch.clone();
             Box::pin(async move {
-                let action = handler.handle_epoch_end(epoch).await
-                    .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle epoch end for epoch {}: {}", route, epoch, e));
-
-                handle_claim_action(&handler, action, &route, &resolver).await;
+                handler.handle_epoch_end(epoch).await
+                    .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to save snapshot for epoch {}: {}", route, epoch, e));
                 Ok(())
             })
         }).await

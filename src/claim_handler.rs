@@ -171,25 +171,6 @@ impl<P: Provider> ClaimHandler<P> {
         Ok(claim.state_root == correct_state_root)
     }
 
-    pub async fn ensure_snapshot_saved(&self, epoch: u64) -> Result<FixedBytes<32>, Box<dyn std::error::Error + Send + Sync>> {
-        let inbox = IVeaInboxArbToEth::new(self.inbox_address, self.inbox_provider.clone());
-        let existing_snapshot = retry_rpc(|| async {
-            inbox.snapshots(U256::from(epoch)).call().await
-        }).await?;
-        if existing_snapshot != FixedBytes::<32>::ZERO {
-            return Ok(existing_snapshot);
-        }
-        let tx = inbox.saveSnapshot().from(self.wallet_address);
-        let pending = tx.send().await?;
-        let receipt = pending.get_receipt().await?;
-        if !receipt.status() {
-            return Err("saveSnapshot transaction failed".into());
-        }
-        let saved_snapshot = retry_rpc(|| async {
-            inbox.snapshots(U256::from(epoch)).call().await
-        }).await?;
-        Ok(saved_snapshot)
-    }
     pub async fn submit_claim(&self, epoch: u64, state_root: FixedBytes<32>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.provider.clone());
         let deposit = retry_rpc(|| async {
@@ -262,28 +243,21 @@ impl<P: Provider> ClaimHandler<P> {
         Ok(())
     }
 
-    pub async fn handle_epoch_end(&self, epoch: u64) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Handling epoch end for epoch {}", epoch);
-        let state_root = self.ensure_snapshot_saved(epoch).await?;
-        if let Some(existing_claim) = self.get_claim_for_epoch(epoch).await? {
-            let is_valid = self.verify_claim(&existing_claim).await?;
-            if is_valid {
-                println!("Existing claim for epoch {} is valid", epoch);
-                Ok(ClaimAction::None)
-            } else {
-                println!("Existing claim for epoch {} is INVALID - should challenge", epoch);
-                Ok(ClaimAction::Challenge {
-                    epoch,
-                    incorrect_claim: existing_claim,
-                })
-            }
-        } else {
-            println!("No claim exists for epoch {} - should make claim", epoch);
-            Ok(ClaimAction::Claim {
-                epoch,
-                state_root,
-            })
+    pub async fn handle_epoch_end(&self, epoch: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let inbox = IVeaInboxArbToEth::new(self.inbox_address, self.inbox_provider.clone());
+        let existing_snapshot = retry_rpc(|| async {
+            inbox.snapshots(U256::from(epoch)).call().await
+        }).await?;
+        if existing_snapshot != FixedBytes::<32>::ZERO {
+            return Ok(());
         }
+        let tx = inbox.saveSnapshot().from(self.wallet_address);
+        let pending = tx.send().await?;
+        let receipt = pending.get_receipt().await?;
+        if !receipt.status() {
+            return Err("saveSnapshot transaction failed".into());
+        }
+        Ok(())
     }
 
     pub async fn handle_claim_event(&self, claim: ClaimEvent) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
