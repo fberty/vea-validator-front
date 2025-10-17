@@ -70,10 +70,6 @@ sol! {
         function hashClaim(Claim memory _claim) external pure returns (bytes32);
     }
 
-    // ============================================
-    // Arbitrum to Gnosis contracts
-    // ============================================
-
     #[derive(Debug)]
     #[sol(rpc)]
     interface IVeaInboxArbToGnosis {
@@ -201,7 +197,5 @@ sol! {
     }
 }
 
-// Type aliases to reduce verbosity throughout the codebase
-// All Claim structs are identical, so we standardize on IVeaOutboxArbToEth's version
 pub type Claim = IVeaOutboxArbToEth::Claim;
 pub type Party = IVeaOutboxArbToEth::Party;

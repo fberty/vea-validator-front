@@ -29,16 +29,12 @@ impl<P: Provider> EpochWatcher<P> {
         let mut check_interval = interval(Duration::from_secs(10));
         check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_epoch = self.get_current_epoch(epoch_period).await?;
-
         loop {
-            // Check immediately on first iteration, then wait for interval
             let current_epoch = self.get_current_epoch(epoch_period).await?;
-
             if current_epoch > last_epoch {
                 let _ = handler(last_epoch).await;
                 last_epoch = current_epoch;
             }
-
             check_interval.tick().await;
         }
     }
@@ -52,20 +48,15 @@ mod tests {
     #[tokio::test]
     async fn test_epoch_calculation() {
         dotenv::dotenv().ok();
-        
         let rpc = std::env::var("ARBITRUM_RPC_URL")
             .expect("ARBITRUM_RPC_URL must be set");
-        
         let provider = ProviderBuilder::new()
             .connect_http(rpc.parse().unwrap());
         let provider = Arc::new(provider);
-        
         let watcher = EpochWatcher::new(provider);
-        
         let epoch_period = 3600u64;
         let epoch = watcher.get_current_epoch(epoch_period).await.unwrap();
         assert!(epoch > 0, "Epoch should be non-zero");
-        
         let next_timestamp = watcher.get_next_epoch_timestamp(epoch_period).await.unwrap();
         assert!(next_timestamp > epoch * epoch_period, "Next epoch timestamp should be in the future");
     }

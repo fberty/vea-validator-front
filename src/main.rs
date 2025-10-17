@@ -12,7 +12,6 @@ use vea_validator::{
     config::ValidatorConfig,
 };
 
-/// Convert ClaimEvent to IVeaInboxArbToEth::Claim
 fn claim_to_arb_eth(event: &ClaimEvent) -> IVeaInboxArbToEth::Claim {
     IVeaInboxArbToEth::Claim {
         stateRoot: event.state_root,
@@ -25,7 +24,6 @@ fn claim_to_arb_eth(event: &ClaimEvent) -> IVeaInboxArbToEth::Claim {
     }
 }
 
-/// Convert ClaimEvent to IVeaInboxArbToGnosis::Claim
 fn claim_to_arb_gnosis(event: &ClaimEvent) -> IVeaInboxArbToGnosis::Claim {
     IVeaInboxArbToGnosis::Claim {
         stateRoot: event.state_root,
@@ -51,33 +49,24 @@ async fn handle_claim_action<P: alloy::providers::Provider, F, Fut>(
         ClaimAction::None => {},
         ClaimAction::Claim { epoch, state_root } => {
             println!("[{}] Submitting claim for epoch {}", route, epoch);
-            // Submit claim failure is OK - someone else may have claimed first
-            // The Claimed event listener will verify whoever's claim
             if let Err(e) = handler.submit_claim(epoch, state_root).await {
                 println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
             }
         }
         ClaimAction::Challenge { epoch, incorrect_claim } => {
             println!("[{}] Challenging incorrect claim for epoch {}", route, epoch);
-
-            // Challenge the claim - acceptable to fail if someone else already challenged
             match handler.challenge_claim(epoch, make_claim(&incorrect_claim)).await {
                 Ok(()) => {
                     println!("[{}] Challenge successful, triggering bridge resolution for epoch {}", route, epoch);
-
-                    // Bridge resolution MUST succeed - failure means honest snapshot can't be verified
                     bridge_resolver(epoch, incorrect_claim.clone()).await
                         .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to trigger bridge resolution for epoch {}: {}", route, epoch, e));
-
                     println!("[{}] Bridge resolution triggered successfully for epoch {}", route, epoch);
                 }
                 Err(e) => {
                     let err_msg = e.to_string();
-                    // OK if another validator already challenged - bridge is defended
                     if err_msg.contains("Claim already challenged") {
                         println!("[{}] Claim already challenged by another validator - bridge is safe", route);
                     } else {
-                        // Any other error is FATAL - means we can't defend the bridge
                         panic!("[{}] FATAL: Failed to challenge incorrect claim for epoch {}: {}", route, epoch, e);
                     }
                 }
@@ -130,25 +119,13 @@ where
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
 
     let current_epoch: u64 = inbox_contract.epochFinalized().call().await?.try_into()?;
-
     println!("[{}] Starting validator for route", route_name);
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route_name, inbox_address, outbox_address);
-
-    // Sync existing claims on startup - look back 10 epochs to be safe
     let sync_from = current_epoch.saturating_sub(10);
     println!("[{}] Syncing and verifying claims from epoch {} to {}...", route_name, sync_from, current_epoch);
-
     let startup_actions = claim_handler.startup_sync_and_verify(sync_from, current_epoch).await
         .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to sync and verify claims: {}", route_name, e));
-
-    // Handle all actions from startup sync
     for action in startup_actions {
-        match &action {
-            ClaimAction::Challenge { epoch, .. } => {
-                println!("[{}] Found incorrect claim for epoch {} from startup sync - challenging", route_name, epoch);
-            }
-            _ => {}
-        }
         let bridge_resolver_startup = bridge_resolver.clone();
         handle_claim_action(&claim_handler, action, route_name, &bridge_resolver_startup).await;
     }
@@ -179,17 +156,12 @@ where
             let route = route_snapshot.clone();
             Box::pin(async move {
                 println!("[{}] Snapshot saved for epoch {} with root {:?}", route, event.epoch, event.state_root);
-
-                // Check if a claim already exists
                 match handler.get_claim_for_epoch(event.epoch).await {
                     Ok(Some(_existing_claim)) => {
                         println!("[{}] Claim already exists for epoch {} - was already verified when Claimed event fired", route, event.epoch);
-                        // Do nothing - the claim was already verified and challenged (if needed) by the Claimed event listener
                     }
                     Ok(None) => {
                         println!("[{}] No claim exists for epoch {} - submitting honest claim", route, event.epoch);
-                        // Note: Failure here is acceptable if someone else claims first
-                        // The Claimed event listener will verify whoever's claim it is
                         if let Err(e) = handler.submit_claim(event.epoch, event.state_root).await {
                             println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
                         }
@@ -213,10 +185,8 @@ where
             let resolver = bridge_resolver_claim.clone();
             Box::pin(async move {
                 println!("[{}] Claim detected for epoch {} by {}", route, event.epoch, event.claimer);
-
                 let action = handler.handle_claim_event(event.clone()).await
                     .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle claim event for epoch {}: {}", route, event.epoch, e));
-
                 handle_claim_action(&handler, action, &route, &resolver).await;
                 Ok(())
             })
@@ -228,7 +198,6 @@ where
         _ = snapshot_handle => println!("[{}] Snapshot watcher stopped", route_name),
         _ = claim_handle => println!("[{}] Claim watcher stopped", route_name),
     }
-
     Ok(())
 }
 
@@ -239,10 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = PrivateKeySigner::from_str(&c.private_key)?;
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
-
     println!("Validator wallet address: {}", wallet_address);
-
-    // Bridge resolver for ARB_TO_ETH: Direct bridge via Arbitrum canonical bridge
     let arb_to_eth_resolver = {
         let rpc = c.arbitrum_rpc.clone();
         let wlt = wallet.clone();
@@ -258,27 +224,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .wallet(wlt)
                     .connect_http(rpc.parse()?);
                 let provider = Arc::new(provider);
-
                 let inbox_contract = IVeaInboxArbToEth::new(inbox, provider);
                 let tx = inbox_contract.sendSnapshot(U256::from(epoch), claim_to_arb_eth(&claim))
                     .from(wlt_addr);
-
                 let pending = tx.send().await?;
                 let receipt = pending.get_receipt().await?;
-
                 if !receipt.status() {
                     return Err("sendSnapshot transaction failed".into());
                 }
-
                 println!("[ARB_TO_ETH] Bridge resolution triggered successfully for epoch {}", epoch);
                 Ok(())
             }
         }
     };
 
-    // Bridge resolver for ARB_TO_GNOSIS: Multi-hop via router
-    // Note: The snapshot needs to be sent from Arbitrum, which goes to the router on mainnet,
-    // which then forwards to Gnosis via AMB. This is a 2-hop process with ~7 day delay on first hop.
     let arb_to_gnosis_resolver = {
         let rpc = c.arbitrum_rpc.clone();
         let wlt = wallet.clone();
@@ -294,23 +253,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .wallet(wlt)
                     .connect_http(rpc.parse()?);
                 let provider = Arc::new(provider);
-
                 let inbox_contract = IVeaInboxArbToGnosis::new(inbox, provider);
-
-                // Gas limit for AMB message - using a reasonable default
-                // This needs to be enough for the router to forward to Gnosis
                 let gas_limit = U256::from(2_000_000u64);
-
                 let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, claim_to_arb_gnosis(&claim))
                     .from(wlt_addr);
-
                 let pending = tx.send().await?;
                 let receipt = pending.get_receipt().await?;
-
                 if !receipt.status() {
                     return Err("sendSnapshot transaction failed".into());
                 }
-
                 println!("[ARB_TO_GNOSIS] Bridge resolution triggered successfully for epoch {}", epoch);
                 println!("[ARB_TO_GNOSIS] Note: Message will take ~7 days to reach mainnet, then be forwarded to Gnosis");
                 Ok(())
@@ -326,10 +277,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         c.arbitrum_rpc.clone(),
         wallet.clone(),
         wallet_address,
-        None, // No WETH for ARB_TO_ETH route
+        None,
         arb_to_eth_resolver,
     ));
-
     let arb_to_gnosis_handle = tokio::spawn(run_validator_for_route(
         "ARB_TO_GNOSIS",
         c.inbox_arb_to_gnosis,
@@ -338,17 +288,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         c.arbitrum_rpc,
         wallet.clone(),
         wallet_address,
-        Some(c.weth_gnosis), // WETH for ARB_TO_GNOSIS route
+        Some(c.weth_gnosis),
         arb_to_gnosis_resolver,
     ));
-
     println!("Running validators for both ARB_TO_ETH and ARB_TO_GNOSIS routes simultaneously...");
-
     tokio::select! {
         _ = arb_to_eth_handle => println!("ARB_TO_ETH validator stopped"),
         _ = arb_to_gnosis_handle => println!("ARB_TO_GNOSIS validator stopped"),
         _ = tokio::signal::ctrl_c() => println!("\nShutting down..."),
     }
-
     Ok(())
 }
