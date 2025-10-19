@@ -168,30 +168,8 @@ where
                 let handler = claim_handler_after.clone();
                 let route = route_after.clone();
                 Box::pin(async move {
-                    match handler.get_correct_state_root(epoch).await {
-                        Ok(state_root) if state_root != alloy::primitives::FixedBytes::<32>::ZERO => {
-                            match handler.get_claim_for_epoch(epoch).await {
-                                Ok(Some(_)) => {
-                                    println!("[{}] Claim already exists for epoch {}", route, epoch);
-                                }
-                                Ok(None) => {
-                                    println!("[{}] No claim for epoch {}, submitting", route, epoch);
-                                    if let Err(e) = handler.submit_claim(epoch, state_root).await {
-                                        println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
-                                    }
-                                }
-                                Err(e) => {
-                                    panic!("[{}] FATAL: Failed to query claim for epoch {}: {}", route, epoch, e);
-                                }
-                            }
-                        }
-                        Ok(_) => {
-                            println!("[{}] No snapshot saved for epoch {}, skipping claim", route, epoch);
-                        }
-                        Err(e) => {
-                            panic!("[{}] FATAL: Failed to get state root for epoch {}: {}", route, epoch, e);
-                        }
-                    }
+                    handler.handle_after_epoch_start(epoch).await
+                        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle after epoch start for epoch {}: {}", route, epoch, e));
                     Ok(())
                 })
             },

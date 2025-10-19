@@ -169,6 +169,19 @@ impl<P: Provider> ClaimHandler<P> {
         }
         Ok(())
     }
+    pub async fn handle_after_epoch_start(&self, epoch: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let state_root = self.get_correct_state_root(epoch).await?;
+        if state_root == FixedBytes::<32>::ZERO {
+            return Ok(());
+        }
+        match self.get_claim_for_epoch(epoch).await? {
+            Some(_) => Ok(()),
+            None => {
+                self.submit_claim(epoch, state_root).await?;
+                Ok(())
+            }
+        }
+    }
     pub async fn handle_claim_event(&self, claim: ClaimEvent) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
         println!("Handling claim event for epoch {}", claim.epoch);
         self.store_claim(claim.clone()).await;
