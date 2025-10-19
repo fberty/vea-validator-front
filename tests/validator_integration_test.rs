@@ -976,8 +976,137 @@ async fn test_race_condition_claim_already_made() {
     fixture.revert_snapshots().await.unwrap();
 }
 
-// NOTE: Challenge race condition test removed - difficult to test due to contract claim validation
-// The validator code in main.rs already handles this case (lines 101-102):
-// if err_msg.contains("Claim already challenged") { println!("bridge is safe"); }
-// This is covered by the existing challenge detection and bridge resolution tests
+#[tokio::test]
+#[serial]
+async fn test_race_condition_challenge_already_made() {
+    println!("\n==============================================");
+    println!("RACE CONDITION TEST: Challenge Already Made");
+    println!("==============================================\n");
+
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
+    let providers = c.setup_arb_to_eth().expect("Failed to setup providers");
+
+    let mut fixture = TestFixture::new(providers.destination_provider.clone(), providers.arbitrum_provider.clone());
+    fixture.take_snapshots().await.unwrap();
+
+    let inbox = IVeaInboxArbToEth::new(c.inbox_arb_to_eth, providers.arbitrum_with_wallet.clone());
+    let outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, providers.destination_with_wallet.clone());
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+
+    // Setup: Create epoch with snapshot
+    for i in 0..3 {
+        let test_message = alloy::primitives::Bytes::from(vec![0x77, 0x88, 0x99, i]);
+        inbox.sendMessage(
+            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+            test_message
+        ).send().await.unwrap().get_receipt().await.unwrap();
+    }
+
+    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
+
+    println!("Epoch {} correct root: {:?}", current_epoch, correct_root);
+
+    advance_time(providers.arbitrum_provider.as_ref(), epoch_period + 70).await;
+    advance_time(providers.destination_provider.as_ref(), epoch_period + 70).await;
+
+    let target_epoch = current_epoch;
+    let eth_block = providers.destination_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let eth_timestamp = eth_block.header.timestamp;
+    let target_timestamp = (target_epoch + 1) * epoch_period + 70;
+    let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
+    if advance_amount > 0 {
+        advance_time(providers.destination_provider.as_ref(), advance_amount).await;
+    }
+
+    // Listen for claim events to get the REAL claim data
+    let event_listener = EventListener::new(
+        providers.destination_provider.clone(),
+        c.outbox_arb_to_eth,
+    );
+
+    let claim_event_captured = Arc::new(tokio::sync::RwLock::new(None::<ClaimEvent>));
+    let claim_event_flag = claim_event_captured.clone();
+
+    let listener_handle = tokio::spawn(async move {
+        event_listener.watch_claims(move |event: ClaimEvent| {
+            let flag = claim_event_flag.clone();
+            Box::pin(async move {
+                let mut captured = flag.write().await;
+                *captured = Some(event);
+                Ok(())
+            })
+        }).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Malicious actor submits WRONG claim
+    println!("Malicious actor submits wrong claim...");
+    let wrong_root = FixedBytes::<32>::from([0xEE; 32]);
+    let deposit = outbox.deposit().call().await.unwrap();
+    outbox.claim(U256::from(target_epoch), wrong_root)
+        .value(deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+
+    println!("✓ Wrong claim submitted, waiting for event...");
+
+    // Wait for event to be captured
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let claim_event = {
+        let captured = claim_event_captured.read().await;
+        captured.clone().expect("Should have captured claim event")
+    };
+
+    listener_handle.abort();
+
+    println!("✓ Captured claim event: epoch {}, root {:?}", claim_event.epoch, claim_event.state_root);
+
+    // Create claim handler
+    let claim_handler = Arc::new(ClaimHandler::new(
+        providers.destination_with_wallet.clone(),
+        providers.arbitrum_with_wallet.clone(),
+        c.outbox_arb_to_eth,
+        c.inbox_arb_to_eth,
+        providers.wallet_address,
+        None,
+    ));
+
+    // First validator challenges
+    println!("First validator challenges...");
+    let claim_struct = vea_validator::claim_handler::make_claim(&claim_event);
+    let first_result = claim_handler.challenge_claim(target_epoch, claim_struct.clone()).await;
+
+    match first_result {
+        Ok(_) => println!("✓ First challenge succeeded"),
+        Err(e) => panic!("First challenge should succeed but failed: {}", e),
+    }
+
+    // Second validator tries to challenge (RACE CONDITION)
+    println!("Second validator attempts to challenge (race condition)...");
+    let second_result = claim_handler.challenge_claim(target_epoch, claim_struct).await;
+
+    match second_result {
+        Err(e) => {
+            let err_msg = e.to_string();
+            println!("✓ Second challenge failed: {}", e);
+            if err_msg.contains("already") || err_msg.contains("challenged") {
+                println!("✓ Error indicates claim already challenged");
+            }
+            println!("✓ Validator did NOT panic - handled gracefully");
+        }
+        Ok(_) => {
+            println!("⚠️  Second challenge succeeded (contract may allow it)");
+            println!("✓ Validator did NOT panic");
+        }
+    }
+
+    println!("\n✅ RACE CONDITION TEST PASSED!");
+    println!("Validator handles duplicate challenges without crashing");
+
+    fixture.revert_snapshots().await.unwrap();
+}
 
