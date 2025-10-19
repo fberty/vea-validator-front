@@ -1,4 +1,4 @@
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{ProviderBuilder, Provider};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::network::EthereumWallet;
@@ -41,5 +41,32 @@ pub async fn check_balances(c: &ValidatorConfig, wallet: Address) -> Result<(), 
         panic!("FATAL: Insufficient WETH balance on Gnosis. Need {} wei for deposit, have {} wei", gnosis_deposit, weth_balance);
     }
     println!("✓ Balance check passed: ETH={} wei, WETH={} wei", eth_balance, weth_balance);
+
+    // Ensure WETH max approval for Gnosis outbox
+    ensure_weth_approval(c, wallet, &gnosis_providers).await?;
+
+    Ok(())
+}
+
+pub async fn ensure_weth_approval<P1: Provider, P2: Provider>(c: &ValidatorConfig, wallet: Address, gnosis_providers: &crate::config::Providers<P1, P2>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let weth = IWETH::new(c.weth_gnosis, gnosis_providers.destination_with_wallet.clone());
+    let current_allowance = weth.allowance(wallet, c.outbox_arb_to_gnosis).call().await?;
+
+    if current_allowance == U256::ZERO {
+        println!("⚠️  No WETH approval found for Gnosis outbox. Setting max approval...");
+        let max_approval = U256::MAX;
+        let approve_tx = weth.approve(c.outbox_arb_to_gnosis, max_approval).from(wallet);
+        let pending = approve_tx.send().await?;
+        let receipt = pending.get_receipt().await?;
+
+        if !receipt.status() {
+            panic!("FATAL: WETH approval transaction failed");
+        }
+
+        println!("✓ WETH max approval set for Gnosis outbox");
+    } else {
+        println!("✓ WETH approval already exists: {} wei", current_allowance);
+    }
+
     Ok(())
 }
