@@ -1,6 +1,5 @@
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
 use alloy::network::{Ethereum, EthereumWallet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -73,29 +72,6 @@ impl ValidatorConfig {
             weth_gnosis,
         })
     }
-
-    pub fn setup_arb_to_eth(&self) -> Result<
-        ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
-        Box<dyn std::error::Error + Send + Sync>
-    > {
-        setup_providers_with_wallet(self.ethereum_rpc.clone(), self.arbitrum_rpc.clone(), self.private_key.clone())
-    }
-
-    pub fn setup_arb_to_gnosis(&self) -> Result<
-        ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
-        Box<dyn std::error::Error + Send + Sync>
-    > {
-        setup_providers_with_wallet(self.gnosis_rpc.clone(), self.arbitrum_rpc.clone(), self.private_key.clone())
-    }
-}
-
-pub struct ProvidersWithWallet<P1, P2> {
-    pub destination_provider: Arc<P1>,
-    pub arbitrum_provider: Arc<P1>,
-    pub destination_with_wallet: Arc<P2>,
-    pub arbitrum_with_wallet: Arc<P2>,
-    pub wallet: EthereumWallet,
-    pub wallet_address: Address,
 }
 
 pub struct Providers<P1, P2> {
@@ -103,28 +79,6 @@ pub struct Providers<P1, P2> {
     pub arbitrum_provider: Arc<P1>,
     pub destination_with_wallet: Arc<P2>,
     pub arbitrum_with_wallet: Arc<P2>,
-}
-
-pub fn setup_providers_with_wallet(
-    destination_rpc: String,
-    arbitrum_rpc: String,
-    private_key: String,
-) -> Result<
-    ProvidersWithWallet<impl Provider + Clone + use<>, impl Provider + Clone + use<>>,
-    Box<dyn std::error::Error + Send + Sync>
-> {
-    let signer = PrivateKeySigner::from_str(&private_key)?;
-    let wallet_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
-    let providers = setup_providers(destination_rpc, arbitrum_rpc, wallet.clone())?;
-    Ok(ProvidersWithWallet {
-        destination_provider: providers.destination_provider,
-        arbitrum_provider: providers.arbitrum_provider,
-        destination_with_wallet: providers.destination_with_wallet,
-        arbitrum_with_wallet: providers.arbitrum_with_wallet,
-        wallet,
-        wallet_address,
-    })
 }
 
 pub fn setup_providers(

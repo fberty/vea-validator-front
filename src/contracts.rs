@@ -143,47 +143,6 @@ sol! {
 
     #[derive(Debug)]
     #[sol(rpc)]
-    interface IRouterArbToGnosis {
-        event Routed(uint256 indexed _epoch, bytes32 _ticketID);
-        event SequencerDelayLimitSent(bytes32 _ticketID);
-        event SequencerDelayLimitUpdated(uint256 _newSequencerDelayLimit);
-        event SequencerDelayLimitDecreaseRequested(uint256 _requestedSequencerDelayLimit);
-
-        function route(uint256 _epoch, bytes32 _stateroot, Claim memory _claim) external;
-        function updateSequencerDelayLimit() external;
-        function sendSequencerDelayLimit() external;
-        function executeSequencerDelayLimitDecreaseRequest() external;
-
-        struct Claim {
-            bytes32 stateRoot;
-            address claimer;
-            uint32 timestampClaimed;
-            uint32 timestampVerification;
-            uint32 blocknumberVerification;
-            Party honest;
-            address challenger;
-        }
-
-        enum Party {
-            None,
-            Claimer,
-            Challenger
-        }
-    }
-
-    #[derive(Debug)]
-    #[sol(rpc)]
-    interface IAMB {
-        function requireToPassMessage(address _contract, bytes memory _data, uint256 _gas) external returns (bytes32);
-        function executeMessageCall(address _contract, address _sender, bytes memory _data, bytes32 _messageId, uint256 _gas) external;
-        function messageSender() external view returns (address);
-        function maxGasPerTx() external view returns (uint256);
-        function messageId() external view returns (bytes32);
-        function messageSourceChainId() external view returns (bytes32);
-    }
-
-    #[derive(Debug)]
-    #[sol(rpc)]
     interface IWETH {
         function deposit() external payable;
         function withdraw(uint256 wad) external;

@@ -1,6 +1,9 @@
 use alloy::providers::Provider;
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use tokio::time::{sleep, Duration};
+
+const BEFORE_EPOCH_BUFFER: u64 = 300;
+const AFTER_EPOCH_BUFFER: u64 = 60;
 
 pub struct EpochWatcher<P: Provider> {
     provider: Arc<P>,
@@ -11,49 +14,49 @@ impl<P: Provider> EpochWatcher<P> {
         Self { provider }
     }
 
-    pub async fn get_current_epoch(&self, epoch_period: u64) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_current_timestamp(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
         let block = self.provider.get_block_by_number(Default::default()).await?.unwrap();
-        Ok(block.header.timestamp / epoch_period)
+        Ok(block.header.timestamp)
     }
 
-    pub async fn get_next_epoch_timestamp(&self, epoch_period: u64) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        let current_epoch = self.get_current_epoch(epoch_period).await?;
-        Ok((current_epoch + 1) * epoch_period)
-    }
-
-    pub async fn watch_epochs<F, Fut>(&self, epoch_period: u64, handler: F) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    pub async fn watch_epochs<FB, FA, FutB, FutA>(
+        &self,
+        epoch_period: u64,
+        before_handler: FB,
+        after_handler: FA,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
-        F: Fn(u64) -> Fut + Send + 'static + Clone,
-        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
+        FB: Fn(u64) -> FutB + Send + 'static + Clone,
+        FutB: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
+        FA: Fn(u64) -> FutA + Send + 'static + Clone,
+        FutA: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
-        let mut check_interval = interval(Duration::from_secs(10));
-        check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_before_epoch: Option<u64> = None;
+        let mut last_after_epoch: Option<u64> = None;
+
         loop {
-            let current_epoch = self.get_current_epoch(epoch_period).await?;
-            handler(current_epoch).await?;
-            check_interval.tick().await;
+            let now = self.get_current_timestamp().await?;
+            let current_epoch = now / epoch_period;
+            let next_epoch_start = (current_epoch + 1) * epoch_period;
+            let time_until_next_epoch = next_epoch_start.saturating_sub(now);
+
+            if time_until_next_epoch <= BEFORE_EPOCH_BUFFER {
+                if last_before_epoch != Some(current_epoch) {
+                    before_handler(current_epoch).await?;
+                    last_before_epoch = Some(current_epoch);
+                }
+            }
+
+            let time_since_epoch_start = now.saturating_sub(current_epoch * epoch_period);
+            if time_since_epoch_start >= AFTER_EPOCH_BUFFER && current_epoch > 0 {
+                let prev_epoch = current_epoch - 1;
+                if last_after_epoch != Some(prev_epoch) {
+                    after_handler(prev_epoch).await?;
+                    last_after_epoch = Some(prev_epoch);
+                }
+            }
+
+            sleep(Duration::from_secs(10)).await;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy::providers::ProviderBuilder;
-
-    #[tokio::test]
-    async fn test_epoch_calculation() {
-        dotenv::dotenv().ok();
-        let rpc = std::env::var("ARBITRUM_RPC_URL")
-            .expect("ARBITRUM_RPC_URL must be set");
-        let provider = ProviderBuilder::new()
-            .connect_http(rpc.parse().unwrap());
-        let provider = Arc::new(provider);
-        let watcher = EpochWatcher::new(provider);
-        let epoch_period = 3600u64;
-        let epoch = watcher.get_current_epoch(epoch_period).await.unwrap();
-        assert!(epoch > 0, "Epoch should be non-zero");
-        let next_timestamp = watcher.get_next_epoch_timestamp(epoch_period).await.unwrap();
-        assert!(next_timestamp > epoch * epoch_period, "Next epoch timestamp should be in the future");
     }
 }

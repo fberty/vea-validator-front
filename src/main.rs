@@ -5,11 +5,12 @@ use alloy::network::{Ethereum, EthereumWallet};
 use std::str::FromStr;
 use std::sync::Arc;
 use vea_validator::{
-    event_listener::{EventListener, SnapshotEvent, ClaimEvent},
+    event_listener::{EventListener, ClaimEvent, SnapshotSentEvent},
     epoch_watcher::EpochWatcher,
     claim_handler::{ClaimHandler, ClaimAction, make_claim},
     contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IWETH},
     config::ValidatorConfig,
+    proof_relay::ProofRelay,
 };
 
 async fn check_balances(c: &ValidatorConfig, wallet: Address) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -126,15 +127,17 @@ where
         weth_address,
     ));
 
+    let event_listener_outbox = EventListener::new(
+        providers.destination_provider.clone(),
+        outbox_address,
+    );
+
     let event_listener_inbox = EventListener::new(
         providers.arbitrum_provider.clone(),
         inbox_address,
     );
 
-    let event_listener_outbox = EventListener::new(
-        providers.destination_provider.clone(),
-        outbox_address,
-    );
+    let proof_relay = Arc::new(ProofRelay::new());
 
     let epoch_watcher = EpochWatcher::new(
         providers.arbitrum_provider.clone(),
@@ -143,57 +146,57 @@ where
     let inbox_contract = IVeaInboxArbToEth::new(inbox_address, providers.arbitrum_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
 
-    let current_epoch: u64 = inbox_contract.epochFinalized().call().await?.try_into()?;
     println!("[{}] Starting validator for route", route_name);
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route_name, inbox_address, outbox_address);
-    let sync_from = current_epoch.saturating_sub(100);
-    println!("[{}] Syncing and verifying claims from epoch {} to {}...", route_name, sync_from, current_epoch);
-    let startup_actions = claim_handler.startup_sync_and_verify(sync_from, current_epoch).await
-        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to sync and verify claims: {}", route_name, e));
-    for action in startup_actions {
-        let bridge_resolver_startup = bridge_resolver.clone();
-        handle_claim_action(&claim_handler, action, route_name, &bridge_resolver_startup).await;
-    }
 
-    let claim_handler_for_epoch = claim_handler.clone();
-    let route_epoch = route_name.to_string();
+    let claim_handler_before = claim_handler.clone();
+    let route_before = route_name.to_string();
+    let claim_handler_after = claim_handler.clone();
+    let route_after = route_name.to_string();
     let epoch_handle = tokio::spawn(async move {
-        epoch_watcher.watch_epochs(epoch_period, move |epoch| {
-            let handler = claim_handler_for_epoch.clone();
-            let route = route_epoch.clone();
-            Box::pin(async move {
-                handler.handle_epoch_end(epoch).await
-                    .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to save snapshot for epoch {}: {}", route, epoch, e));
-                Ok(())
-            })
-        }).await
-    });
-
-    let claim_handler_for_snapshots = claim_handler.clone();
-    let route_snapshot = route_name.to_string();
-    let snapshot_handle = tokio::spawn(async move {
-        event_listener_inbox.watch_snapshots(move |event: SnapshotEvent| {
-            let handler = claim_handler_for_snapshots.clone();
-            let route = route_snapshot.clone();
-            Box::pin(async move {
-                println!("[{}] Snapshot saved for epoch {} with root {:?}", route, event.epoch, event.state_root);
-                match handler.get_claim_for_epoch(event.epoch).await {
-                    Ok(Some(_existing_claim)) => {
-                        println!("[{}] Claim already exists for epoch {} - was already verified when Claimed event fired", route, event.epoch);
-                    }
-                    Ok(None) => {
-                        println!("[{}] No claim exists for epoch {} - submitting honest claim", route, event.epoch);
-                        if let Err(e) = handler.submit_claim(event.epoch, event.state_root).await {
-                            println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
+        epoch_watcher.watch_epochs(
+            epoch_period,
+            move |epoch| {
+                let handler = claim_handler_before.clone();
+                let route = route_before.clone();
+                Box::pin(async move {
+                    handler.handle_epoch_end(epoch).await
+                        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to save snapshot for epoch {}: {}", route, epoch, e));
+                    Ok(())
+                })
+            },
+            move |epoch| {
+                let handler = claim_handler_after.clone();
+                let route = route_after.clone();
+                Box::pin(async move {
+                    match handler.get_correct_state_root(epoch).await {
+                        Ok(state_root) if state_root != alloy::primitives::FixedBytes::<32>::ZERO => {
+                            match handler.get_claim_for_epoch(epoch).await {
+                                Ok(Some(_)) => {
+                                    println!("[{}] Claim already exists for epoch {}", route, epoch);
+                                }
+                                Ok(None) => {
+                                    println!("[{}] No claim for epoch {}, submitting", route, epoch);
+                                    if let Err(e) = handler.submit_claim(epoch, state_root).await {
+                                        println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
+                                    }
+                                }
+                                Err(e) => {
+                                    panic!("[{}] FATAL: Failed to query claim for epoch {}: {}", route, epoch, e);
+                                }
+                            }
+                        }
+                        Ok(_) => {
+                            println!("[{}] No snapshot saved for epoch {}, skipping claim", route, epoch);
+                        }
+                        Err(e) => {
+                            panic!("[{}] FATAL: Failed to get state root for epoch {}: {}", route, epoch, e);
                         }
                     }
-                    Err(e) => {
-                        panic!("[{}] FATAL: Failed to query claim for epoch {}: {}", route, event.epoch, e);
-                    }
-                }
-                Ok(())
-            })
-        }).await
+                    Ok(())
+                })
+            },
+        ).await
     });
 
     let claim_handler_for_claims = claim_handler.clone();
@@ -214,10 +217,37 @@ where
         }).await
     });
 
+    let proof_relay_for_snapshot_sent = proof_relay.clone();
+    let route_snapshot_sent = route_name.to_string();
+    let snapshot_sent_handle = tokio::spawn(async move {
+        event_listener_inbox.watch_snapshot_sent(move |event: SnapshotSentEvent| {
+            let relay = proof_relay_for_snapshot_sent.clone();
+            let route = route_snapshot_sent.clone();
+            Box::pin(async move {
+                println!("[{}] SnapshotSent for epoch {} with ticketID {:?}", route, event.epoch, event.ticket_id);
+                relay.store_snapshot_sent(event.epoch, event.ticket_id, event.timestamp).await;
+                Ok(())
+            })
+        }).await
+    });
+
+    let route_relay = route_name.to_string();
+    let relay_handle = tokio::spawn(async move {
+        proof_relay.watch_and_relay(move |epoch, ticket_id| {
+            let route = route_relay.clone();
+            Box::pin(async move {
+                println!("[{}] TODO: Relay proof for epoch {} with ticketID {:?}", route, epoch, ticket_id);
+                println!("[{}] Need to implement: constructOutboxProof({:?}) then Outbox.executeTransaction()", route, ticket_id);
+                Ok(())
+            })
+        }).await
+    });
+
     tokio::select! {
         _ = epoch_handle => println!("[{}] Epoch watcher stopped", route_name),
-        _ = snapshot_handle => println!("[{}] Snapshot watcher stopped", route_name),
         _ = claim_handle => println!("[{}] Claim watcher stopped", route_name),
+        _ = snapshot_sent_handle => println!("[{}] SnapshotSent watcher stopped", route_name),
+        _ = relay_handle => println!("[{}] Proof relay stopped", route_name),
     }
     Ok(())
 }

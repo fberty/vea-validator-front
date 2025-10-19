@@ -98,32 +98,6 @@ impl<P: Provider> ClaimHandler<P> {
         claims.insert(claim.epoch, claim);
     }
 
-    pub async fn sync_existing_claims(&self, from_epoch: u64, to_epoch: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::rpc::types::Filter;
-        use alloy::primitives::keccak256;
-
-        println!("Syncing existing claims from epoch {} to {}", from_epoch, to_epoch);
-
-        let event_signature = "Claimed(address,uint256,bytes32)";
-        let event_hash = keccak256(event_signature.as_bytes());
-
-        let filter = Filter::new()
-            .address(self.outbox_address)
-            .event_signature(event_hash);
-
-        let logs = self.provider.get_logs(&filter).await?;
-
-        for log in logs {
-            if let Some(claim) = parse_claim_from_log(&log, &self.provider).await? {
-                if claim.epoch >= from_epoch && claim.epoch <= to_epoch {
-                    self.store_claim(claim.clone()).await;
-                    println!("Synced claim for epoch {}", claim.epoch);
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub async fn get_claim_for_epoch(&self, epoch: u64) -> Result<Option<ClaimEvent>, Box<dyn std::error::Error + Send + Sync>> {
         {
             let claims = self.claims.read().await;
@@ -274,23 +248,6 @@ impl<P: Provider> ClaimHandler<P> {
                 incorrect_claim: claim,
             })
         }
-    }
-
-    pub async fn startup_sync_and_verify(&self, from_epoch: u64, to_epoch: u64) -> Result<Vec<ClaimAction>, Box<dyn std::error::Error + Send + Sync>> {
-        self.sync_existing_claims(from_epoch, to_epoch).await?;
-        let mut actions = Vec::new();
-        for epoch in from_epoch..=to_epoch {
-            if let Some(claim) = self.get_claim_for_epoch(epoch).await? {
-                let is_valid = self.verify_claim(&claim).await?;
-                if !is_valid {
-                    actions.push(ClaimAction::Challenge {
-                        epoch,
-                        incorrect_claim: claim,
-                    });
-                }
-            }
-        }
-        Ok(actions)
     }
 }
 
