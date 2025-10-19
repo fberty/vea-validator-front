@@ -8,6 +8,8 @@ Must be extremely DRY. Must have no excessive comments. Few LOCs is appreciated.
 
 Make a super conclusion there with WHATS LEFT and only whats left. and btw anything NOT in here in this implementation proposal, MUST be removed, as there must be ZERO redundancy in the repo. Useless code must be nuked.
 
+You can only provide things that are PENDING. dont write about the things we know about. we dont care about them, we already know about them. only the pending items pls
+
 Extras That are Intended:
 
 - balance check, to verify whether if theres enough capital to challenge if needed

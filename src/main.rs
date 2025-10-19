@@ -12,6 +12,22 @@ use vea_validator::{
     config::ValidatorConfig,
     proof_relay::{ProofRelay, L2ToL1MessageData},
 };
+async fn check_rpc_health(c: &ValidatorConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Checking RPC endpoint health...");
+    let arb_provider = ProviderBuilder::new().connect_http(c.arbitrum_rpc.parse()?);
+    let eth_provider = ProviderBuilder::new().connect_http(c.ethereum_rpc.parse()?);
+    let gnosis_provider = ProviderBuilder::new().connect_http(c.gnosis_rpc.parse()?);
+    let arb_block = arb_provider.get_block_number().await
+        .map_err(|e| panic!("FATAL: Arbitrum RPC unreachable or unhealthy: {}", e))?;
+    println!("✓ Arbitrum RPC healthy (block: {})", arb_block);
+    let eth_block = eth_provider.get_block_number().await
+        .map_err(|e| panic!("FATAL: Ethereum RPC unreachable or unhealthy: {}", e))?;
+    println!("✓ Ethereum RPC healthy (block: {})", eth_block);
+    let gnosis_block = gnosis_provider.get_block_number().await
+        .map_err(|e| panic!("FATAL: Gnosis RPC unreachable or unhealthy: {}", e))?;
+    println!("✓ Gnosis RPC healthy (block: {})", gnosis_block);
+    Ok(())
+}
 async fn check_balances(c: &ValidatorConfig, wallet: Address) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let signer = PrivateKeySigner::from_str(&c.private_key)?;
     let eth_providers = vea_validator::config::setup_providers(c.ethereum_rpc.clone(), c.arbitrum_rpc.clone(), EthereumWallet::from(signer.clone()))?;
@@ -302,6 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let wallet_address = signer.address();
     let wallet = EthereumWallet::from(signer);
     println!("Validator wallet address: {}", wallet_address);
+    check_rpc_health(&c).await?;
     check_balances(&c, wallet_address).await?;
     let arb_to_eth_resolver = {
         let rpc = c.arbitrum_rpc.clone();
