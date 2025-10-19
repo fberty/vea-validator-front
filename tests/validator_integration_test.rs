@@ -1,5 +1,7 @@
+mod common;
+
 use alloy::primitives::{Address, FixedBytes, U256};
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::providers::{ProviderBuilder};
 use alloy::network::Ethereum;
 use serial_test::serial;
 use std::str::FromStr;
@@ -13,70 +15,7 @@ use vea_validator::{
     config::ValidatorConfig,
     epoch_watcher::EpochWatcher,
 };
-
-// Test fixture
-struct TestFixture<P1: Provider, P2: Provider> {
-    eth_provider: Arc<P1>,
-    arb_provider: Arc<P2>,
-    eth_snapshot_id: Option<String>,
-    arb_snapshot_id: Option<String>,
-}
-
-impl<P1: Provider, P2: Provider> TestFixture<P1, P2> {
-    fn new(eth_provider: Arc<P1>, arb_provider: Arc<P2>) -> Self {
-        Self {
-            eth_provider,
-            arb_provider,
-            eth_snapshot_id: None,
-            arb_snapshot_id: None,
-        }
-    }
-
-    async fn take_snapshots(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let empty_params: Vec<serde_json::Value> = vec![];
-
-        let eth_snapshot: serde_json::Value = self.eth_provider
-            .raw_request("evm_snapshot".into(), empty_params.clone())
-            .await?;
-        self.eth_snapshot_id = Some(eth_snapshot.as_str().unwrap().to_string());
-
-        let arb_snapshot: serde_json::Value = self.arb_provider
-            .raw_request("evm_snapshot".into(), empty_params)
-            .await?;
-        self.arb_snapshot_id = Some(arb_snapshot.as_str().unwrap().to_string());
-
-        Ok(())
-    }
-
-    async fn revert_snapshots(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref snapshot_id) = self.eth_snapshot_id {
-            let _: serde_json::Value = self.eth_provider
-                .raw_request("evm_revert".into(), vec![serde_json::json!(snapshot_id)])
-                .await?;
-        }
-
-        if let Some(ref snapshot_id) = self.arb_snapshot_id {
-            let _: serde_json::Value = self.arb_provider
-                .raw_request("evm_revert".into(), vec![serde_json::json!(snapshot_id)])
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-async fn advance_time<P: Provider>(provider: &P, seconds: u64) {
-    let _: serde_json::Value = provider
-        .raw_request("evm_increaseTime".into(), vec![serde_json::json!(seconds)])
-        .await
-        .expect("Failed to advance time");
-
-    let empty_params: Vec<serde_json::Value> = vec![];
-    let _: serde_json::Value = provider
-        .raw_request("evm_mine".into(), empty_params)
-        .await
-        .expect("Failed to mine block");
-}
+use common::{TestFixture, advance_time, Provider};
 
 #[tokio::test]
 #[serial]
