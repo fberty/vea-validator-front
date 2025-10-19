@@ -4,6 +4,10 @@ A document explaining in human terms, what this application is, how it works, et
 
 The agent aiding in the production of this application must make sure every point applies, no exception.
 
+Must be extremely DRY. Must have no excessive comments. Few LOCs is appreciated. Don't use excessive empty whitelines. Surprising situations MUST cause the program to fail spectacularly. The separation of concerns is EXTREME. Don't worry about the tests.
+
+Make a super conclusion there with WHATS LEFT and only whats left. and btw anything NOT in here in this implementation proposal, MUST be removed, as there must be ZERO redundancy in the repo. Useless code must be nuked.
+
 Desired Wishlist:
 
 
