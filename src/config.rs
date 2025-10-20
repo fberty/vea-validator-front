@@ -12,6 +12,7 @@ pub struct ChainInfo {
     pub deposit_token: Option<Address>,
 }
 
+#[derive(Clone)]
 pub struct Route {
     pub name: &'static str,
     pub inbox_chain_id: u64,
@@ -25,7 +26,6 @@ pub struct Route {
 pub struct ValidatorConfig {
     pub private_key: String,
     pub wallet: EthereumWallet,
-    pub wallet_address: Address,
     pub chains: HashMap<u64, ChainInfo>,
     pub inbox_arb_to_eth: Address,
     pub outbox_arb_to_eth: Address,
@@ -78,7 +78,6 @@ impl ValidatorConfig {
 
         use alloy::signers::local::PrivateKeySigner;
         let signer = PrivateKeySigner::from_str(&private_key)?;
-        let wallet_address = signer.address();
         let wallet = EthereumWallet::from(signer);
 
         let mut chains = HashMap::new();
@@ -118,7 +117,6 @@ impl ValidatorConfig {
         Ok(Self {
             private_key,
             wallet,
-            wallet_address,
             chains,
             inbox_arb_to_eth,
             outbox_arb_to_eth,

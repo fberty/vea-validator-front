@@ -28,7 +28,8 @@ pub async fn check_rpc_health(c: &ValidatorConfig) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-pub async fn check_balances(c: &ValidatorConfig, wallet: Address) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn check_balances(c: &ValidatorConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let wallet = c.wallet.default_signer().address();
     let eth_rpc = &c.chains.get(&1).expect("Ethereum").rpc_url;
     let gnosis_rpc = &c.chains.get(&100).expect("Gnosis").rpc_url;
 
@@ -56,12 +57,13 @@ pub async fn check_balances(c: &ValidatorConfig, wallet: Address) -> Result<(), 
     }
     println!("✓ Balance check passed: ETH={} wei, WETH={} wei", eth_balance, weth_balance);
 
-    ensure_weth_approval(c, wallet, gnosis_outbox.provider().clone()).await?;
+    ensure_weth_approval(c, gnosis_outbox.provider().clone()).await?;
 
     Ok(())
 }
 
-pub async fn ensure_weth_approval<P: Provider>(c: &ValidatorConfig, wallet: Address, gnosis_provider: std::sync::Arc<P>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn ensure_weth_approval<P: Provider>(c: &ValidatorConfig, gnosis_provider: std::sync::Arc<P>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let wallet = c.wallet.default_signer().address();
     let weth_addr = c.chains.get(&100).expect("Gnosis").deposit_token
         .expect("Gnosis should use WETH");
     let weth = IWETH::new(weth_addr, gnosis_provider);
