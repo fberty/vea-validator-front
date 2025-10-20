@@ -87,12 +87,8 @@ where
     Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
 {
     let claim_handler = Arc::new(ClaimHandler::new(
-        route.inbox_rpc.clone(),
-        route.outbox_rpc.clone(),
-        route.inbox_address,
-        route.outbox_address,
+        route.clone(),
         wallet.clone(),
-        route.weth_address,
     ));
     let event_listener_outbox = EventListener::new(
         route.outbox_rpc.clone(),
