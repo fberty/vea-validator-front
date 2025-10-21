@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, FixedBytes, U256, Bytes};
+use alloy::primitives::{Address, FixedBytes, U256, Bytes, address};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::network::EthereumWallet;
 use alloy::rpc::types::TransactionRequest;
@@ -8,7 +8,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
+
 const RELAY_DELAY: u64 = 7 * 24 * 3600 + 600;
+
+// Arbitrum system contract addresses (constant across all Arbitrum chains)
+const ARB_SYS_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
+const NODE_INTERFACE_ADDRESS: Address = address!("00000000000000000000000000000000000000C8");
 #[derive(Debug, Clone)]
 pub struct L2ToL1MessageData {
     pub ticket_id: FixedBytes<32>,
@@ -46,21 +51,20 @@ impl ProofRelay {
 
         // Get merkle state from ArbSys
         let inbox_provider = ProviderBuilder::new().connect_http(self.route.inbox_rpc.parse()?);
-        let arb_sys_addr = Address::from_slice(&[0u8; 19].iter().chain(&[0x64u8]).copied().collect::<Vec<u8>>());
-        let arb_sys = IArbSys::new(arb_sys_addr, inbox_provider);
+        let arb_sys = IArbSys::new(ARB_SYS_ADDRESS, inbox_provider);
         let merkle_state = arb_sys.sendMerkleTreeState().call().await
             .map_err(|e| format!("Failed to get merkle state: {}", e))?;
         let size = merkle_state.size;
 
         // Generate proof via NodeInterface
-        let node_interface_addr = Address::from_slice(&[0u8; 19].iter().chain(&[0xC8u8]).copied().collect::<Vec<u8>>());
         let proof_bytes = {
             let inbox_provider = ProviderBuilder::new().connect_http(self.route.inbox_rpc.parse()?);
-            let mut call_data = vec![0x42, 0x69, 0x6c, 0x6c];
+            // TODO: Use proper contract interface instead of raw call
+            let mut call_data = vec![0x42, 0x69, 0x6c, 0x6c]; // constructOutboxProof selector
             call_data.extend_from_slice(&size.to_be_bytes::<32>());
             call_data.extend_from_slice(&msg_data.position.to_be_bytes::<32>());
             let result = inbox_provider.call(TransactionRequest::default()
-                .to(node_interface_addr)
+                .to(NODE_INTERFACE_ADDRESS)
                 .input(Bytes::from(call_data).into()))
                 .await
                 .map_err(|e| format!("NodeInterface call failed: {}", e))?;
