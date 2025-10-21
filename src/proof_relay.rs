@@ -1,5 +1,5 @@
 use alloy::primitives::{Address, FixedBytes, U256, Bytes, address};
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::providers::Provider;
 use alloy::network::EthereumWallet;
 use alloy::rpc::types::TransactionRequest;
 use crate::contracts::{IArbSys, IOutbox};
@@ -50,20 +50,17 @@ impl ProofRelay {
         println!("[{}] Executing proof relay for epoch {}", self.route.name, epoch);
 
         // Get merkle state from ArbSys
-        let inbox_provider = ProviderBuilder::new().connect_http(self.route.inbox_rpc.parse()?);
-        let arb_sys = IArbSys::new(ARB_SYS_ADDRESS, inbox_provider);
+        let arb_sys = IArbSys::new(ARB_SYS_ADDRESS, self.route.inbox_provider.clone());
         let merkle_state = arb_sys.sendMerkleTreeState().call().await
             .map_err(|e| format!("Failed to get merkle state: {}", e))?;
         let size = merkle_state.size;
 
         // Generate proof via NodeInterface
         let proof_bytes = {
-            let inbox_provider = ProviderBuilder::new().connect_http(self.route.inbox_rpc.parse()?);
-            // TODO: Use proper contract interface instead of raw call
             let mut call_data = vec![0x42, 0x69, 0x6c, 0x6c]; // constructOutboxProof selector
             call_data.extend_from_slice(&size.to_be_bytes::<32>());
             call_data.extend_from_slice(&msg_data.position.to_be_bytes::<32>());
-            let result = inbox_provider.call(TransactionRequest::default()
+            let result = self.route.inbox_provider.call(TransactionRequest::default()
                 .to(NODE_INTERFACE_ADDRESS)
                 .input(Bytes::from(call_data).into()))
                 .await
@@ -91,10 +88,7 @@ impl ProofRelay {
         }
 
         // Execute transaction on outbox
-        let outbox_provider = ProviderBuilder::new()
-            .wallet(self.wallet.clone())
-            .connect_http(self.route.outbox_rpc.parse()?);
-        let outbox = IOutbox::new(self.route.outbox_address, outbox_provider);
+        let outbox = IOutbox::new(self.route.outbox_address, self.route.outbox_provider.clone());
         let tx = outbox.executeTransaction(
             proof,
             msg_data.position,

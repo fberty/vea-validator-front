@@ -1,17 +1,15 @@
 use alloy::primitives::U256;
-use alloy::providers::{ProviderBuilder, Provider};
+use alloy::providers::Provider;
 use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IWETH};
-use crate::config::ValidatorConfig;
+use crate::config::{ValidatorConfig, Route};
+use std::sync::Arc;
 
-pub async fn check_rpc_health(c: &ValidatorConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn check_rpc_health(routes: &[Route]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Checking RPC endpoint health...");
-    let arb_rpc = &c.chains.get(&42161).expect("Arbitrum").rpc_url;
-    let eth_rpc = &c.chains.get(&1).expect("Ethereum").rpc_url;
-    let gnosis_rpc = &c.chains.get(&100).expect("Gnosis").rpc_url;
 
-    let arb_provider = ProviderBuilder::new().connect_http(arb_rpc.parse()?);
-    let eth_provider = ProviderBuilder::new().connect_http(eth_rpc.parse()?);
-    let gnosis_provider = ProviderBuilder::new().connect_http(gnosis_rpc.parse()?);
+    let arb_provider = &routes[0].inbox_provider;
+    let eth_provider = &routes[0].outbox_provider;
+    let gnosis_provider = &routes[1].outbox_provider;
 
     let arb_block = arb_provider.get_block_number().await
         .map_err(|e| panic!("FATAL: Arbitrum RPC unreachable or unhealthy: {}", e))?;
@@ -25,21 +23,16 @@ pub async fn check_rpc_health(c: &ValidatorConfig) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-pub async fn check_balances(c: &ValidatorConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn check_balances(c: &ValidatorConfig, routes: &[Route]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let wallet = c.wallet.default_signer().address();
-    let eth_rpc = &c.chains.get(&1).expect("Ethereum").rpc_url;
-    let gnosis_rpc = &c.chains.get(&100).expect("Gnosis").rpc_url;
+    let eth_provider = routes[0].outbox_provider.clone();
+    let gnosis_provider = routes[1].outbox_provider.clone();
 
-    let eth_provider = ProviderBuilder::new().connect_http(eth_rpc.parse()?);
-    let gnosis_provider = ProviderBuilder::new()
-        .wallet(c.wallet.clone())
-        .connect_http(gnosis_rpc.parse()?);
-
-    let eth_outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, std::sync::Arc::new(eth_provider));
-    let gnosis_outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, std::sync::Arc::new(gnosis_provider));
+    let eth_outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, eth_provider.clone());
+    let gnosis_outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, gnosis_provider.clone());
 
     let eth_deposit = eth_outbox.deposit().call().await?;
-    let eth_balance = eth_outbox.provider().get_balance(wallet).await?;
+    let eth_balance = eth_provider.get_balance(wallet).await?;
     if eth_balance < eth_deposit {
         panic!("FATAL: Insufficient ETH balance. Need {} wei for deposit, have {} wei", eth_deposit, eth_balance);
     }
@@ -47,19 +40,19 @@ pub async fn check_balances(c: &ValidatorConfig) -> Result<(), Box<dyn std::erro
     let gnosis_deposit = gnosis_outbox.deposit().call().await?;
     let weth_addr = c.chains.get(&100).expect("Gnosis").deposit_token
         .expect("Gnosis should use WETH");
-    let weth = IWETH::new(weth_addr, gnosis_outbox.provider().clone());
+    let weth = IWETH::new(weth_addr, gnosis_provider.clone());
     let weth_balance = weth.balanceOf(wallet).call().await?;
     if weth_balance < gnosis_deposit {
         panic!("FATAL: Insufficient WETH balance on Gnosis. Need {} wei for deposit, have {} wei", gnosis_deposit, weth_balance);
     }
     println!("✓ Balance check passed: ETH={} wei, WETH={} wei", eth_balance, weth_balance);
 
-    ensure_weth_approval(c, gnosis_outbox.provider().clone()).await?;
+    ensure_weth_approval(c, gnosis_provider).await?;
 
     Ok(())
 }
 
-pub async fn ensure_weth_approval<P: Provider>(c: &ValidatorConfig, gnosis_provider: std::sync::Arc<P>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn ensure_weth_approval(c: &ValidatorConfig, gnosis_provider: Arc<dyn Provider + Send + Sync>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let wallet = c.wallet.default_signer().address();
     let weth_addr = c.chains.get(&100).expect("Gnosis").deposit_token
         .expect("Gnosis should use WETH");

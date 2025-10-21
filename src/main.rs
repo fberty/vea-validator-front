@@ -1,7 +1,6 @@
 use alloy::primitives::U256;
-use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::network::{Ethereum, EthereumWallet};
+use alloy::network::EthereumWallet;
 use std::str::FromStr;
 use std::sync::Arc;
 use vea_validator::{
@@ -67,19 +66,18 @@ where
         wallet.clone(),
     ));
     let event_listener_outbox = EventListener::new(
-        route.outbox_rpc.clone(),
+        route.outbox_provider.clone(),
         route.outbox_address,
     );
     let event_listener_inbox = EventListener::new(
-        route.inbox_rpc.clone(),
+        route.inbox_provider.clone(),
         route.inbox_address,
     );
     let proof_relay = Arc::new(ProofRelay::new(route.clone(), wallet.clone()));
     let epoch_watcher = EpochWatcher::new(
-        route.inbox_rpc.clone(),
+        route.inbox_provider.clone(),
     );
-    let inbox_provider = ProviderBuilder::new().connect_http(route.inbox_rpc.parse()?);
-    let inbox_contract = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider);
+    let inbox_contract = IVeaInboxArbToEth::new(route.inbox_address, route.inbox_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
     println!("[{}] Starting validator for route", route.name);
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route.name, route.inbox_address, route.outbox_address);
@@ -161,24 +159,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let signer = PrivateKeySigner::from_str(&c.private_key)?;
     let wallet = EthereumWallet::from(signer);
     println!("Validator wallet address: {}", wallet.default_signer().address());
-    check_rpc_health(&c).await?;
-    check_balances(&c).await?;
     let routes = c.build_routes();
+    check_rpc_health(&routes).await?;
+    check_balances(&c, &routes).await?;
     let arb_to_eth_route = &routes[0];
     let arb_to_gnosis_route = &routes[1];
 
     let arb_to_eth_resolver = {
-        let rpc = arb_to_eth_route.inbox_rpc.clone();
+        let provider = arb_to_eth_route.inbox_provider.clone();
         let wlt = wallet.clone();
         let inbox = arb_to_eth_route.inbox_address;
         move |epoch: u64, claim: ClaimEvent| {
-            let rpc = rpc.clone();
+            let provider = provider.clone();
             let wlt = wlt.clone();
             async move {
                 println!("[ARB_TO_ETH] Triggering bridge resolution for epoch {}", epoch);
-                let provider = ProviderBuilder::<_, _, Ethereum>::new()
-                    .wallet(wlt.clone())
-                    .connect_http(rpc.parse()?);
                 let inbox_contract = IVeaInboxArbToEth::new(inbox, provider);
                 let tx = inbox_contract.sendSnapshot(U256::from(epoch), make_inbox_claim_arb_to_eth(&claim))
                     .from(wlt.default_signer().address());
@@ -193,17 +188,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
     let arb_to_gnosis_resolver = {
-        let rpc = arb_to_gnosis_route.inbox_rpc.clone();
+        let provider = arb_to_gnosis_route.inbox_provider.clone();
         let wlt = wallet.clone();
         let inbox = arb_to_gnosis_route.inbox_address;
         move |epoch: u64, claim: ClaimEvent| {
-            let rpc = rpc.clone();
+            let provider = provider.clone();
             let wlt = wlt.clone();
             async move {
                 println!("[ARB_TO_GNOSIS] Triggering bridge resolution for epoch {}", epoch);
-                let provider = ProviderBuilder::<_, _, Ethereum>::new()
-                    .wallet(wlt.clone())
-                    .connect_http(rpc.parse()?);
                 let inbox_contract = IVeaInboxArbToGnosis::new(inbox, provider);
                 let gas_limit = U256::from(2_000_000u64);
                 let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, make_inbox_claim_arb_to_gnosis(&claim))

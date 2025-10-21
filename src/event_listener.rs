@@ -4,6 +4,8 @@ use alloy::rpc::types::Filter;
 use alloy::primitives::keccak256;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+
 #[derive(Debug, Clone)]
 pub struct ClaimEvent {
     pub epoch: u64,
@@ -26,13 +28,13 @@ pub struct SnapshotSentEvent {
     pub data: Vec<u8>,
 }
 pub struct EventListener {
-    rpc_url: String,
+    provider: Arc<dyn Provider + Send + Sync>,
     contract_address: Address,
 }
 impl EventListener {
-    pub fn new(rpc_url: String, contract_address: Address) -> Self {
+    pub fn new(provider: Arc<dyn Provider + Send + Sync>, contract_address: Address) -> Self {
         Self {
-            rpc_url,
+            provider,
             contract_address,
         }
     }
@@ -41,15 +43,13 @@ impl EventListener {
         F: Fn(ClaimEvent) -> Fut + Send + 'static + Clone,
         Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
-        use alloy::providers::ProviderBuilder;
-        let provider = ProviderBuilder::new().connect_http(self.rpc_url.parse()?);
         let event_signature = "Claimed(address,uint256,bytes32)";
         let event_hash = keccak256(event_signature.as_bytes());
         loop {
             let filter = Filter::new()
                 .address(self.contract_address)
                 .event_signature(event_hash);
-            match provider.watch_logs(&filter).await {
+            match self.provider.watch_logs(&filter).await {
                 Ok(subscription) => {
                     let mut stream = subscription.into_stream();
                     while let Some(logs) = stream.next().await {
@@ -62,7 +62,7 @@ impl EventListener {
                                 }
                                 let state_root = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
                                 let block_number = log.block_number.unwrap_or(0);
-                                let block = provider.get_block_by_number(block_number.into()).await?;
+                                let block = self.provider.get_block_by_number(block_number.into()).await?;
                                 let timestamp_claimed = block.unwrap().header.timestamp as u32;
                                 let event = ClaimEvent { epoch, state_root, claimer, timestamp_claimed };
                                 handler(event).await?;
@@ -83,8 +83,6 @@ impl EventListener {
         F: Fn(SnapshotSentEvent) -> Fut + Send + 'static + Clone,
         Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
-        use alloy::providers::ProviderBuilder;
-        let provider = ProviderBuilder::new().connect_http(self.rpc_url.parse()?);
         let event_signature = "SnapshotSent(uint256,bytes32)";
         let event_hash = keccak256(event_signature.as_bytes());
         let arb_sys_address = Address::from_slice(&[0u8; 19].iter().chain(&[0x64u8]).copied().collect::<Vec<u8>>());
@@ -93,7 +91,7 @@ impl EventListener {
             let filter = Filter::new()
                 .address(self.contract_address)
                 .event_signature(event_hash);
-            match provider.watch_logs(&filter).await {
+            match self.provider.watch_logs(&filter).await {
                 Ok(subscription) => {
                     let mut stream = subscription.into_stream();
                     while let Some(logs) = stream.next().await {
@@ -102,10 +100,10 @@ impl EventListener {
                                 let epoch = U256::from_be_bytes(log.topics()[1].0).to::<u64>();
                                 let ticket_id = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
                                 let block_number = log.block_number.unwrap_or(0);
-                                let block = provider.get_block_by_number(block_number.into()).await?;
+                                let block = self.provider.get_block_by_number(block_number.into()).await?;
                                 let timestamp = block.unwrap().header.timestamp;
                                 let tx_hash = log.transaction_hash.ok_or("Missing transaction hash")?;
-                                let receipt = provider.get_transaction_receipt(tx_hash).await?.ok_or("Receipt not found")?;
+                                let receipt = self.provider.get_transaction_receipt(tx_hash).await?.ok_or("Receipt not found")?;
                                 let mut l2_to_l1_data = None;
                                 for receipt_log in receipt.inner.logs() {
                                     if receipt_log.address() == arb_sys_address && receipt_log.topics().len() >= 4 && receipt_log.topics()[0] == l2_to_l1_tx_sig {

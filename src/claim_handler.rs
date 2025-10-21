@@ -82,9 +82,7 @@ impl ClaimHandler {
         Ok(claims.get(&epoch).cloned())
     }
     pub async fn get_correct_state_root(&self, epoch: u64) -> Result<FixedBytes<32>, Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::providers::ProviderBuilder;
-        let provider = Arc::new(ProviderBuilder::new().connect_http(self.route.inbox_rpc.parse()?));
-        let inbox = IVeaInboxArbToEth::new(self.route.inbox_address, provider);
+        let inbox = IVeaInboxArbToEth::new(self.route.inbox_address, self.route.inbox_provider.clone());
         retry_rpc(|| async {
             inbox.snapshots(U256::from(epoch)).call().await
         }).await
@@ -94,11 +92,7 @@ impl ClaimHandler {
         Ok(claim.state_root == correct_state_root)
     }
     pub async fn submit_claim(&self, epoch: u64, state_root: FixedBytes<32>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::providers::ProviderBuilder;
-        let provider = Arc::new(ProviderBuilder::new()
-            .wallet(self.wallet.clone())
-            .connect_http(self.route.outbox_rpc.parse()?));
-        let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, provider);
+        let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, self.route.outbox_provider.clone());
         let deposit = retry_rpc(|| async {
             outbox.deposit().call().await
         }).await?;
@@ -113,17 +107,12 @@ impl ClaimHandler {
         Ok(())
     }
     pub async fn challenge_claim(&self, epoch: u64, claim: IVeaOutboxArbToEth::Claim) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::providers::ProviderBuilder;
-        let provider = Arc::new(ProviderBuilder::new()
-            .wallet(self.wallet.clone())
-            .connect_http(self.route.outbox_rpc.parse()?));
-
         if let Some(weth_addr) = self.route.weth_address {
-            let outbox_gnosis = IVeaOutboxArbToGnosis::new(self.route.outbox_address, provider.clone());
+            let outbox_gnosis = IVeaOutboxArbToGnosis::new(self.route.outbox_address, self.route.outbox_provider.clone());
             let deposit = retry_rpc(|| async {
                 outbox_gnosis.deposit().call().await
             }).await?;
-            let weth = IWETH::new(weth_addr, provider.clone());
+            let weth = IWETH::new(weth_addr, self.route.outbox_provider.clone());
             let wallet_address = self.wallet.default_signer().address();
             let current_allowance = retry_rpc(|| async {
                 weth.allowance(wallet_address, self.route.outbox_address).call().await
@@ -159,7 +148,7 @@ impl ClaimHandler {
                 return Err("challenge transaction failed".into());
             }
         } else {
-            let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, provider);
+            let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, self.route.outbox_provider.clone());
             let deposit = retry_rpc(|| async {
                 outbox.deposit().call().await
             }).await?;
@@ -176,11 +165,7 @@ impl ClaimHandler {
         Ok(())
     }
     pub async fn handle_epoch_end(&self, epoch: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::providers::ProviderBuilder;
-        let provider = Arc::new(ProviderBuilder::new()
-            .wallet(self.wallet.clone())
-            .connect_http(self.route.inbox_rpc.parse()?));
-        let inbox = IVeaInboxArbToEth::new(self.route.inbox_address, provider);
+        let inbox = IVeaInboxArbToEth::new(self.route.inbox_address, self.route.inbox_provider.clone());
         let existing_snapshot = retry_rpc(|| async {
             inbox.snapshots(U256::from(epoch)).call().await
         }).await?;

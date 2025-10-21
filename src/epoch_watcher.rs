@@ -1,17 +1,18 @@
+use alloy::providers::Provider;
 use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+
 const BEFORE_EPOCH_BUFFER: u64 = 300;
 const AFTER_EPOCH_BUFFER: u64 = 60;
 pub struct EpochWatcher {
-    rpc_url: String,
+    provider: Arc<dyn Provider + Send + Sync>,
 }
 impl EpochWatcher {
-    pub fn new(rpc_url: String) -> Self {
-        Self { rpc_url }
+    pub fn new(provider: Arc<dyn Provider + Send + Sync>) -> Self {
+        Self { provider }
     }
     async fn get_current_timestamp(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        use alloy::providers::{Provider, ProviderBuilder};
-        let provider = ProviderBuilder::new().connect_http(self.rpc_url.parse()?);
-        let block = provider.get_block_by_number(Default::default()).await?.unwrap();
+        let block = self.provider.get_block_by_number(Default::default()).await?.unwrap();
         Ok(block.header.timestamp)
     }
     pub async fn watch_epochs<FB, FA, FutB, FutA>(

@@ -1,5 +1,6 @@
 use alloy::primitives::Address;
-use alloy::network::EthereumWallet;
+use alloy::network::{EthereumWallet, Ethereum};
+use alloy::providers::{ProviderBuilder, DynProvider};
 use std::str::FromStr;
 use std::collections::HashMap;
 
@@ -15,10 +16,10 @@ pub struct Route {
     pub name: &'static str,
     pub inbox_chain_id: u64,
     pub inbox_address: Address,
-    pub inbox_rpc: String,
+    pub inbox_provider: DynProvider<Ethereum>,
     pub outbox_chain_id: u64,
     pub outbox_address: Address,
-    pub outbox_rpc: String,
+    pub outbox_provider: DynProvider<Ethereum>,
     pub weth_address: Option<Address>,
 }
 
@@ -33,25 +34,42 @@ pub struct ValidatorConfig {
 }
 impl ValidatorConfig {
     pub fn build_routes(&self) -> Vec<Route> {
+        let arb_rpc = &self.chains.get(&42161).expect("Arbitrum").rpc_url;
+        let eth_rpc = &self.chains.get(&1).expect("Ethereum").rpc_url;
+        let gnosis_rpc = &self.chains.get(&100).expect("Gnosis").rpc_url;
+
+        let arb_provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .on_http(arb_rpc.parse().expect("Invalid Arbitrum RPC URL"))
+            .into();
+        let eth_provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .on_http(eth_rpc.parse().expect("Invalid Ethereum RPC URL"))
+            .into();
+        let gnosis_provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .on_http(gnosis_rpc.parse().expect("Invalid Gnosis RPC URL"))
+            .into();
+
         vec![
             Route {
                 name: "ARB_TO_ETH",
                 inbox_chain_id: 42161,
                 inbox_address: self.inbox_arb_to_eth,
-                inbox_rpc: self.chains.get(&42161).expect("Arbitrum").rpc_url.clone(),
+                inbox_provider: arb_provider.clone(),
                 outbox_chain_id: 1,
                 outbox_address: self.outbox_arb_to_eth,
-                outbox_rpc: self.chains.get(&1).expect("Ethereum").rpc_url.clone(),
+                outbox_provider: eth_provider.clone(),
                 weth_address: self.chains.get(&1).expect("Ethereum").deposit_token,
             },
             Route {
                 name: "ARB_TO_GNOSIS",
                 inbox_chain_id: 42161,
                 inbox_address: self.inbox_arb_to_gnosis,
-                inbox_rpc: self.chains.get(&42161).expect("Arbitrum").rpc_url.clone(),
+                inbox_provider: arb_provider.clone(),
                 outbox_chain_id: 100,
                 outbox_address: self.outbox_arb_to_gnosis,
-                outbox_rpc: self.chains.get(&100).expect("Gnosis").rpc_url.clone(),
+                outbox_provider: gnosis_provider.clone(),
                 weth_address: self.chains.get(&100).expect("Gnosis").deposit_token,
             },
         ]
