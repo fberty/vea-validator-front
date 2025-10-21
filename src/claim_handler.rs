@@ -1,6 +1,6 @@
 use alloy::primitives::{Address, FixedBytes, U256};
 use crate::event_listener::ClaimEvent;
-use crate::contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IWETH};
+use crate::contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IWETH};
 use crate::config::Route;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -33,6 +33,30 @@ pub fn make_claim(event: &ClaimEvent) -> IVeaOutboxArbToEth::Claim {
         timestampVerification: 0,
         blocknumberVerification: 0,
         honest: IVeaOutboxArbToEth::Party::None,
+        challenger: Address::ZERO,
+    }
+}
+
+pub fn make_inbox_claim_arb_to_eth(event: &ClaimEvent) -> IVeaInboxArbToEth::Claim {
+    IVeaInboxArbToEth::Claim {
+        stateRoot: event.state_root,
+        claimer: event.claimer,
+        timestampClaimed: event.timestamp_claimed,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: IVeaInboxArbToEth::Party::None,
+        challenger: Address::ZERO,
+    }
+}
+
+pub fn make_inbox_claim_arb_to_gnosis(event: &ClaimEvent) -> IVeaInboxArbToGnosis::Claim {
+    IVeaInboxArbToGnosis::Claim {
+        stateRoot: event.state_root,
+        claimer: event.claimer,
+        timestampClaimed: event.timestamp_claimed,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: IVeaInboxArbToGnosis::Party::None,
         challenger: Address::ZERO,
     }
 }

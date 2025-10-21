@@ -7,36 +7,12 @@ use std::sync::Arc;
 use vea_validator::{
     event_listener::{EventListener, ClaimEvent, SnapshotSentEvent},
     epoch_watcher::EpochWatcher,
-    claim_handler::{ClaimHandler, ClaimAction, make_claim},
+    claim_handler::{ClaimHandler, ClaimAction, make_claim, make_inbox_claim_arb_to_eth, make_inbox_claim_arb_to_gnosis},
     contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis, IArbSys, IOutbox},
     config::ValidatorConfig,
     proof_relay::{ProofRelay, L2ToL1MessageData},
     startup::{check_rpc_health, check_balances},
 };
-
-fn claim_to_arb_eth(event: &ClaimEvent) -> IVeaInboxArbToEth::Claim {
-    IVeaInboxArbToEth::Claim {
-        stateRoot: event.state_root,
-        claimer: event.claimer,
-        timestampClaimed: event.timestamp_claimed,
-        timestampVerification: 0,
-        blocknumberVerification: 0,
-        honest: IVeaInboxArbToEth::Party::None,
-        challenger: Address::ZERO,
-    }
-}
-
-fn claim_to_arb_gnosis(event: &ClaimEvent) -> IVeaInboxArbToGnosis::Claim {
-    IVeaInboxArbToGnosis::Claim {
-        stateRoot: event.state_root,
-        claimer: event.claimer,
-        timestampClaimed: event.timestamp_claimed,
-        timestampVerification: 0,
-        blocknumberVerification: 0,
-        honest: IVeaInboxArbToGnosis::Party::None,
-        challenger: Address::ZERO,
-    }
-}
 
 async fn handle_claim_action<F, Fut>(
     handler: &Arc<ClaimHandler>,
@@ -268,7 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .wallet(wlt.clone())
                     .connect_http(rpc.parse()?);
                 let inbox_contract = IVeaInboxArbToEth::new(inbox, provider);
-                let tx = inbox_contract.sendSnapshot(U256::from(epoch), claim_to_arb_eth(&claim))
+                let tx = inbox_contract.sendSnapshot(U256::from(epoch), make_inbox_claim_arb_to_eth(&claim))
                     .from(wlt.default_signer().address());
                 let tx_result = tx.send().await?;
                 let receipt = tx_result.get_receipt().await?;
@@ -294,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .connect_http(rpc.parse()?);
                 let inbox_contract = IVeaInboxArbToGnosis::new(inbox, provider);
                 let gas_limit = U256::from(2_000_000u64);
-                let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, claim_to_arb_gnosis(&claim))
+                let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, make_inbox_claim_arb_to_gnosis(&claim))
                     .from(wlt.default_signer().address());
                 let tx_result = tx.send().await?;
                 let receipt = tx_result.get_receipt().await?;
