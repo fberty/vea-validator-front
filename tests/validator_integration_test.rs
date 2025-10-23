@@ -1,8 +1,6 @@
 mod common;
 
 use alloy::primitives::{Address, FixedBytes, U256};
-use alloy::providers::ProviderBuilder;
-use alloy::network::Ethereum;
 use serial_test::serial;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -88,22 +86,19 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
             Box::pin(async move {
                 println!("📡 Validator detected claim for epoch {} by {}", event.epoch, event.claimer);
 
-                if let Ok(action) = handler.handle_claim_event(event.clone()).await {
-                    match action {
-                        vea_validator::claim_handler::ClaimAction::Challenge { epoch, incorrect_claim } => {
-                            println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
+                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
+                    if let Some(incorrect_claim) = invalid_claim {
+                        let epoch = incorrect_claim.epoch;
+                        println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
 
-                            if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
-                                eprintln!("❌ Challenge failed: {}", e);
-                            } else {
-                                println!("✅ Validator successfully challenged the claim!");
-                                flag.store(true, Ordering::SeqCst);
-                            }
+                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
+                            eprintln!("❌ Challenge failed: {}", e);
+                        } else {
+                            println!("✅ Validator successfully challenged the claim!");
+                            flag.store(true, Ordering::SeqCst);
                         }
-                        vea_validator::claim_handler::ClaimAction::None => {
-                            println!("ℹ️  Validator decided NO ACTION needed");
-                        }
-                        _ => {}
+                    } else {
+                        println!("ℹ️  Validator decided NO ACTION needed");
                     }
                 }
                 Ok(())
@@ -265,20 +260,18 @@ async fn test_validator_triggers_bridge_resolution() {
             Box::pin(async move {
                 println!("📡 Detected claim for epoch {}", event.epoch);
 
-                if let Ok(action) = handler.handle_claim_event(event.clone()).await {
-                    match action {
-                        vea_validator::claim_handler::ClaimAction::Challenge { epoch, .. } => {
-                            println!("⚔️  Challenging and triggering bridge resolution...");
+                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
+                    if let Some(incorrect_claim) = invalid_claim {
+                        let epoch = incorrect_claim.epoch;
+                        println!("⚔️  Challenging and triggering bridge resolution...");
 
-                            if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&event)).await {
-                                eprintln!("Challenge failed: {}", e);
-                            } else {
-                                if let Err(e) = resolver_clone(epoch, event.clone()).await {
-                                    eprintln!("Bridge resolution failed: {}", e);
-                                }
+                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
+                            eprintln!("Challenge failed: {}", e);
+                        } else {
+                            if let Err(e) = resolver_clone(epoch, event.clone()).await {
+                                eprintln!("Bridge resolution failed: {}", e);
                             }
                         }
-                        _ => {}
                     }
                 }
                 Ok(())
@@ -403,22 +396,19 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
             Box::pin(async move {
                 println!("📡 Validator detected claim for epoch {} by {}", event.epoch, event.claimer);
 
-                if let Ok(action) = handler.handle_claim_event(event.clone()).await {
-                    match action {
-                        vea_validator::claim_handler::ClaimAction::Challenge { epoch, incorrect_claim } => {
-                            println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
+                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
+                    if let Some(incorrect_claim) = invalid_claim {
+                        let epoch = incorrect_claim.epoch;
+                        println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
 
-                            if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
-                                eprintln!("❌ Challenge failed: {}", e);
-                            } else {
-                                println!("✅ Validator successfully challenged the claim!");
-                                flag.store(true, Ordering::SeqCst);
-                            }
+                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
+                            eprintln!("❌ Challenge failed: {}", e);
+                        } else {
+                            println!("✅ Validator successfully challenged the claim!");
+                            flag.store(true, Ordering::SeqCst);
                         }
-                        vea_validator::claim_handler::ClaimAction::None => {
-                            println!("ℹ️  Validator decided NO ACTION needed");
-                        }
-                        _ => {}
+                    } else {
+                        println!("ℹ️  Validator decided NO ACTION needed");
                     }
                 }
                 Ok(())

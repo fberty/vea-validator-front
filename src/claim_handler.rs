@@ -99,10 +99,19 @@ impl ClaimHandler {
         let tx = outbox.claim(U256::from(epoch), state_root)
             .from(self.wallet.default_signer().address())
             .value(deposit);
-        let pending = tx.send().await?;
+        let pending = match tx.send().await {
+            Ok(p) => p,
+            Err(e) => {
+                let err_msg = e.to_string();
+                if err_msg.contains("Claim already made") {
+                    return Err("Claim already made".into());
+                }
+                panic!("FATAL: Unexpected error submitting claim for epoch {}: {}", epoch, e);
+            }
+        };
         let receipt = pending.get_receipt().await?;
         if !receipt.status() {
-            return Err("claim transaction failed".into());
+            panic!("FATAL: Claim transaction reverted for epoch {}", epoch);
         }
         Ok(())
     }
@@ -142,10 +151,19 @@ impl ClaimHandler {
             };
             let tx = outbox_gnosis.challenge(U256::from(epoch), gnosis_claim)
                 .from(wallet_address);
-            let pending = tx.send().await?;
+            let pending = match tx.send().await {
+                Ok(p) => p,
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Claim already challenged") {
+                        return Err("Claim already challenged".into());
+                    }
+                    panic!("FATAL: Unexpected error challenging claim for epoch {}: {}", epoch, e);
+                }
+            };
             let receipt = pending.get_receipt().await?;
             if !receipt.status() {
-                return Err("challenge transaction failed".into());
+                panic!("FATAL: Challenge transaction reverted for epoch {}", epoch);
             }
         } else {
             let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, self.route.outbox_provider.clone());
@@ -156,10 +174,19 @@ impl ClaimHandler {
             let tx = outbox.challenge(U256::from(epoch), claim, wallet_address)
                 .from(wallet_address)
                 .value(deposit);
-            let pending = tx.send().await?;
+            let pending = match tx.send().await {
+                Ok(p) => p,
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Claim already challenged") {
+                        return Err("Claim already challenged".into());
+                    }
+                    panic!("FATAL: Unexpected error challenging claim for epoch {}: {}", epoch, e);
+                }
+            };
             let receipt = pending.get_receipt().await?;
             if !receipt.status() {
-                return Err("challenge transaction failed".into());
+                panic!("FATAL: Challenge transaction reverted for epoch {}", epoch);
             }
         }
         Ok(())
@@ -188,36 +215,26 @@ impl ClaimHandler {
         match self.get_claim_for_epoch(epoch).await? {
             Some(_) => Ok(()),
             None => {
-                self.submit_claim(epoch, state_root).await?;
-                Ok(())
+                match self.submit_claim(epoch, state_root).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        println!("Claim already made by another validator for epoch {} - bridge is safe", epoch);
+                        Ok(())
+                    }
+                }
             }
         }
     }
-    pub async fn handle_claim_event(&self, claim: ClaimEvent) -> Result<ClaimAction, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn handle_claim_event(&self, claim: ClaimEvent) -> Result<Option<ClaimEvent>, Box<dyn std::error::Error + Send + Sync>> {
         println!("Handling claim event for epoch {}", claim.epoch);
         self.store_claim(claim.clone()).await;
         let is_valid = self.verify_claim(&claim).await?;
         if is_valid {
             println!("Claim for epoch {} is valid", claim.epoch);
-            Ok(ClaimAction::None)
+            Ok(None)
         } else {
             println!("Claim for epoch {} is INVALID - should challenge", claim.epoch);
-            Ok(ClaimAction::Challenge {
-                epoch: claim.epoch,
-                incorrect_claim: claim,
-            })
+            Ok(Some(claim))
         }
     }
-}
-#[derive(Debug, Clone)]
-pub enum ClaimAction {
-    None,
-    Claim {
-        epoch: u64,
-        state_root: FixedBytes<32>,
-    },
-    Challenge {
-        epoch: u64,
-        incorrect_claim: ClaimEvent,
-    },
 }

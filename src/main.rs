@@ -6,48 +6,33 @@ use std::sync::Arc;
 use vea_validator::{
     event_listener::{EventListener, ClaimEvent, SnapshotSentEvent},
     epoch_watcher::EpochWatcher,
-    claim_handler::{ClaimHandler, ClaimAction, make_claim, make_inbox_claim_arb_to_eth, make_inbox_claim_arb_to_gnosis},
+    claim_handler::{ClaimHandler, make_claim, make_inbox_claim_arb_to_eth, make_inbox_claim_arb_to_gnosis},
     contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis},
     config::ValidatorConfig,
     proof_relay::{ProofRelay, L2ToL1MessageData},
     startup::{check_rpc_health, check_balances},
 };
 
-async fn handle_claim_action<F, Fut>(
+async fn handle_invalid_claim<F, Fut>(
     handler: &Arc<ClaimHandler>,
-    action: ClaimAction,
+    incorrect_claim: ClaimEvent,
     route: &str,
     bridge_resolver: &F,
 ) where
     F: Fn(u64, ClaimEvent) -> Fut + Send + Sync,
     Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
 {
-    match action {
-        ClaimAction::None => {},
-        ClaimAction::Claim { epoch, state_root } => {
-            println!("[{}] Submitting claim for epoch {}", route, epoch);
-            if let Err(e) = handler.submit_claim(epoch, state_root).await {
-                println!("[{}] Submit claim failed (likely someone else claimed first): {}", route, e);
-            }
+    let epoch = incorrect_claim.epoch;
+    println!("[{}] Challenging incorrect claim for epoch {}", route, epoch);
+    match handler.challenge_claim(epoch, make_claim(&incorrect_claim)).await {
+        Ok(()) => {
+            println!("[{}] Challenge successful, triggering bridge resolution for epoch {}", route, epoch);
+            bridge_resolver(epoch, incorrect_claim.clone()).await
+                .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to trigger bridge resolution for epoch {}: {}", route, epoch, e));
+            println!("[{}] Bridge resolution triggered successfully for epoch {}", route, epoch);
         }
-        ClaimAction::Challenge { epoch, incorrect_claim } => {
-            println!("[{}] Challenging incorrect claim for epoch {}", route, epoch);
-            match handler.challenge_claim(epoch, make_claim(&incorrect_claim)).await {
-                Ok(()) => {
-                    println!("[{}] Challenge successful, triggering bridge resolution for epoch {}", route, epoch);
-                    bridge_resolver(epoch, incorrect_claim.clone()).await
-                        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to trigger bridge resolution for epoch {}: {}", route, epoch, e));
-                    println!("[{}] Bridge resolution triggered successfully for epoch {}", route, epoch);
-                }
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("Claim already challenged") {
-                        println!("[{}] Claim already challenged by another validator - bridge is safe", route);
-                    } else {
-                        panic!("[{}] FATAL: Failed to challenge incorrect claim for epoch {}: {}", route, epoch, e);
-                    }
-                }
-            }
+        Err(_) => {
+            println!("[{}] Claim already challenged by another validator - bridge is safe", route);
         }
     }
 }
@@ -112,9 +97,11 @@ where
             let resolver = bridge_resolver_for_claims.clone();
             Box::pin(async move {
                 println!("[{}] Claim detected for epoch {} by {}", route.name, event.epoch, event.claimer);
-                let action = handler.handle_claim_event(event.clone()).await
+                let invalid_claim = handler.handle_claim_event(event.clone()).await
                     .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle claim event for epoch {}: {}", route.name, event.epoch, e));
-                handle_claim_action(&handler, action, route.name, &resolver).await;
+                if let Some(claim) = invalid_claim {
+                    handle_invalid_claim(&handler, claim, route.name, &resolver).await;
+                }
                 Ok(())
             })
         }).await
