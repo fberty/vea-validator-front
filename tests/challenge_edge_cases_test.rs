@@ -77,7 +77,7 @@ async fn test_challenge_uses_correct_root_from_inbox() {
     outbox.claim(U256::from(current_epoch), wrong_root).value(deposit)
         .send().await.unwrap().get_receipt().await.unwrap();
 
-    let claim_handler = ClaimHandler::new(route.clone(), c.wallet.clone());
+    let claim_handler = ClaimHandler::new(route.clone(), c.wallet.default_signer().address());
     let state_root_from_handler = claim_handler.get_correct_state_root(current_epoch).await.unwrap();
 
     assert_eq!(state_root_from_handler, correct_root, "ClaimHandler should fetch the CORRECT root from inbox");
@@ -111,7 +111,7 @@ async fn test_weth_approval_set_on_startup_if_missing() {
     let allowance_before = weth.allowance(wallet_address, route.outbox_address).call().await.unwrap();
     assert_eq!(allowance_before, U256::ZERO, "Allowance should be zero before startup");
 
-    ensure_weth_approval(&c, route.outbox_provider.clone()).await.unwrap();
+    ensure_weth_approval(&c, route.outbox_provider.clone(), wallet_address).await.unwrap();
 
     let allowance_after = weth.allowance(wallet_address, route.outbox_address).call().await.unwrap();
     assert_eq!(allowance_after, U256::MAX, "Allowance should be MAX after startup");
@@ -139,7 +139,7 @@ async fn test_weth_approval_skipped_if_already_exists() {
     let approve_tx = weth.approve(route.outbox_address, manual_approval).from(wallet_address);
     approve_tx.send().await.unwrap().get_receipt().await.unwrap();
 
-    ensure_weth_approval(&c, route.outbox_provider.clone()).await.unwrap();
+    ensure_weth_approval(&c, route.outbox_provider.clone(), wallet_address).await.unwrap();
 
     let final_allowance = weth.allowance(wallet_address, route.outbox_address).call().await.unwrap();
     assert_eq!(final_allowance, manual_approval, "Allowance should remain unchanged when already set");
