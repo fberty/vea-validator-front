@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, FixedBytes, U256, Bytes, address};
 use alloy::providers::Provider;
-use alloy::network::EthereumWallet;
 use alloy::rpc::types::TransactionRequest;
 use crate::contracts::{IArbSys, IOutbox};
 use crate::config::Route;
@@ -11,7 +10,6 @@ use tokio::time::{sleep, Duration};
 
 const RELAY_DELAY: u64 = 7 * 24 * 3600 + 600;
 
-// Arbitrum system contract addresses (constant across all Arbitrum chains)
 const ARB_SYS_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
 const NODE_INTERFACE_ADDRESS: Address = address!("00000000000000000000000000000000000000C8");
 #[derive(Debug, Clone)]
@@ -30,15 +28,13 @@ pub struct L2ToL1MessageData {
 pub struct ProofRelay {
     pending: Arc<RwLock<HashMap<u64, L2ToL1MessageData>>>,
     route: Route,
-    wallet: EthereumWallet,
 }
 
 impl ProofRelay {
-    pub fn new(route: Route, wallet: EthereumWallet) -> Self {
+    pub fn new(route: Route) -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
             route,
-            wallet,
         }
     }
     pub async fn store_snapshot_sent(&self, epoch: u64, msg_data: L2ToL1MessageData) {

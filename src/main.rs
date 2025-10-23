@@ -1,4 +1,4 @@
-use alloy::primitives::U256;
+use alloy::primitives::{U256, Address};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::network::EthereumWallet;
 use std::str::FromStr;
@@ -39,7 +39,7 @@ async fn handle_invalid_claim<F, Fut>(
 
 async fn run_validator_for_route<F, Fut>(
     route: vea_validator::config::Route,
-    wallet: EthereumWallet,
+    wallet_address: Address,
     bridge_resolver: F,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
@@ -48,7 +48,7 @@ where
 {
     let claim_handler = Arc::new(ClaimHandler::new(
         route.clone(),
-        wallet.clone(),
+        wallet_address,
     ));
     let event_listener_outbox = EventListener::new(
         route.outbox_provider.clone(),
@@ -58,7 +58,7 @@ where
         route.inbox_provider.clone(),
         route.inbox_address,
     );
-    let proof_relay = Arc::new(ProofRelay::new(route.clone(), wallet.clone()));
+    let proof_relay = Arc::new(ProofRelay::new(route.clone()));
     let epoch_watcher = EpochWatcher::new(
         route.inbox_provider.clone(),
     );
@@ -154,16 +154,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let arb_to_eth_resolver = {
         let provider = arb_to_eth_route.inbox_provider.clone();
-        let wlt = wallet.clone();
         let inbox = arb_to_eth_route.inbox_address;
         move |epoch: u64, claim: ClaimEvent| {
             let provider = provider.clone();
-            let wlt = wlt.clone();
             async move {
                 println!("[ARB_TO_ETH] Triggering bridge resolution for epoch {}", epoch);
                 let inbox_contract = IVeaInboxArbToEth::new(inbox, provider);
-                let tx = inbox_contract.sendSnapshot(U256::from(epoch), make_claim(&claim))
-                    .from(wlt.default_signer().address());
+                let tx = inbox_contract.sendSnapshot(U256::from(epoch), make_claim(&claim));
                 let tx_result = tx.send().await?;
                 let receipt = tx_result.get_receipt().await?;
                 if !receipt.status() {
@@ -176,17 +173,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let arb_to_gnosis_resolver = {
         let provider = arb_to_gnosis_route.inbox_provider.clone();
-        let wlt = wallet.clone();
         let inbox = arb_to_gnosis_route.inbox_address;
         move |epoch: u64, claim: ClaimEvent| {
             let provider = provider.clone();
-            let wlt = wlt.clone();
             async move {
                 println!("[ARB_TO_GNOSIS] Triggering bridge resolution for epoch {}", epoch);
                 let inbox_contract = IVeaInboxArbToGnosis::new(inbox, provider);
                 let gas_limit = U256::from(2_000_000u64);
-                let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, make_claim(&claim))
-                    .from(wlt.default_signer().address());
+                let tx = inbox_contract.sendSnapshot(U256::from(epoch), gas_limit, make_claim(&claim));
                 let tx_result = tx.send().await?;
                 let receipt = tx_result.get_receipt().await?;
                 if !receipt.status() {
@@ -197,14 +191,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
     };
+    let wallet_address = wallet.default_signer().address();
     let arb_to_eth_handle = tokio::spawn(run_validator_for_route(
         routes[0].clone(),
-        wallet.clone(),
+        wallet_address,
         arb_to_eth_resolver,
     ));
     let arb_to_gnosis_handle = tokio::spawn(run_validator_for_route(
         routes[1].clone(),
-        wallet.clone(),
+        wallet_address,
         arb_to_gnosis_resolver,
     ));
     println!("Running validators for both ARB_TO_ETH and ARB_TO_GNOSIS routes simultaneously...");

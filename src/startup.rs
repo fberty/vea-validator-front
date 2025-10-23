@@ -24,7 +24,7 @@ pub async fn check_rpc_health(routes: &[Route]) -> Result<(), Box<dyn std::error
 }
 
 pub async fn check_balances(c: &ValidatorConfig, routes: &[Route]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let wallet = c.wallet.default_signer().address();
+    let wallet_address = c.wallet.default_signer().address();
     let eth_provider = routes[0].outbox_provider.clone();
     let gnosis_provider = routes[1].outbox_provider.clone();
 
@@ -32,7 +32,7 @@ pub async fn check_balances(c: &ValidatorConfig, routes: &[Route]) -> Result<(),
     let gnosis_outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, gnosis_provider.clone());
 
     let eth_deposit = eth_outbox.deposit().call().await?;
-    let eth_balance = eth_provider.get_balance(wallet).await?;
+    let eth_balance = eth_provider.get_balance(wallet_address).await?;
     if eth_balance < eth_deposit {
         panic!("FATAL: Insufficient ETH balance. Need {} wei for deposit, have {} wei", eth_deposit, eth_balance);
     }
@@ -41,28 +41,27 @@ pub async fn check_balances(c: &ValidatorConfig, routes: &[Route]) -> Result<(),
     let weth_addr = c.chains.get(&100).expect("Gnosis").deposit_token
         .expect("Gnosis should use WETH");
     let weth = IWETH::new(weth_addr, gnosis_provider.clone());
-    let weth_balance = weth.balanceOf(wallet).call().await?;
+    let weth_balance = weth.balanceOf(wallet_address).call().await?;
     if weth_balance < gnosis_deposit {
         panic!("FATAL: Insufficient WETH balance on Gnosis. Need {} wei for deposit, have {} wei", gnosis_deposit, weth_balance);
     }
     println!("✓ Balance check passed: ETH={} wei, WETH={} wei", eth_balance, weth_balance);
 
-    ensure_weth_approval(c, gnosis_provider).await?;
+    ensure_weth_approval(c, gnosis_provider, wallet_address).await?;
 
     Ok(())
 }
 
-pub async fn ensure_weth_approval(c: &ValidatorConfig, gnosis_provider: DynProvider<Ethereum>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let wallet = c.wallet.default_signer().address();
+pub async fn ensure_weth_approval(c: &ValidatorConfig, gnosis_provider: DynProvider<Ethereum>, wallet_address: alloy::primitives::Address) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let weth_addr = c.chains.get(&100).expect("Gnosis").deposit_token
         .expect("Gnosis should use WETH");
     let weth = IWETH::new(weth_addr, gnosis_provider);
-    let current_allowance = weth.allowance(wallet, c.outbox_arb_to_gnosis).call().await?;
+    let current_allowance = weth.allowance(wallet_address, c.outbox_arb_to_gnosis).call().await?;
 
     if current_allowance == U256::ZERO {
         println!("⚠️  No WETH approval found for Gnosis outbox. Setting max approval...");
         let max_approval = U256::MAX;
-        let approve_tx = weth.approve(c.outbox_arb_to_gnosis, max_approval).from(wallet);
+        let approve_tx = weth.approve(c.outbox_arb_to_gnosis, max_approval);
         let pending = approve_tx.send().await?;
         let receipt = pending.get_receipt().await?;
 

@@ -39,14 +39,14 @@ pub fn make_claim(event: &ClaimEvent) -> Claim {
 }
 pub struct ClaimHandler {
     route: Route,
-    wallet: alloy::network::EthereumWallet,
+    wallet_address: Address,
     claims: Arc<RwLock<HashMap<u64, ClaimEvent>>>,
 }
 impl ClaimHandler {
-    pub fn new(route: Route, wallet: alloy::network::EthereumWallet) -> Self {
+    pub fn new(route: Route, wallet_address: Address) -> Self {
         Self {
             route,
-            wallet,
+            wallet_address,
             claims: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -74,7 +74,6 @@ impl ClaimHandler {
             outbox.deposit().call().await
         }).await?;
         let tx = outbox.claim(U256::from(epoch), state_root)
-            .from(self.wallet.default_signer().address())
             .value(deposit);
         let pending = match tx.send().await {
             Ok(p) => p,
@@ -99,21 +98,18 @@ impl ClaimHandler {
                 outbox_gnosis.deposit().call().await
             }).await?;
             let weth = IWETH::new(weth_addr, self.route.outbox_provider.clone());
-            let wallet_address = self.wallet.default_signer().address();
             let current_allowance = retry_rpc(|| async {
-                weth.allowance(wallet_address, self.route.outbox_address).call().await
+                weth.allowance(self.wallet_address, self.route.outbox_address).call().await
             }).await?;
             if current_allowance < deposit {
-                let approve_tx = weth.approve(self.route.outbox_address, deposit)
-                    .from(wallet_address);
+                let approve_tx = weth.approve(self.route.outbox_address, deposit);
                 let approve_pending = approve_tx.send().await?;
                 let approve_receipt = approve_pending.get_receipt().await?;
                 if !approve_receipt.status() {
                     return Err("WETH approval failed".into());
                 }
             }
-            let tx = outbox_gnosis.challenge(U256::from(epoch), claim)
-                .from(wallet_address);
+            let tx = outbox_gnosis.challenge(U256::from(epoch), claim);
             let pending = match tx.send().await {
                 Ok(p) => p,
                 Err(e) => {
@@ -133,9 +129,7 @@ impl ClaimHandler {
             let deposit = retry_rpc(|| async {
                 outbox.deposit().call().await
             }).await?;
-            let wallet_address = self.wallet.default_signer().address();
-            let tx = outbox.challenge(U256::from(epoch), claim, wallet_address)
-                .from(wallet_address)
+            let tx = outbox.challenge(U256::from(epoch), claim, self.wallet_address)
                 .value(deposit);
             let pending = match tx.send().await {
                 Ok(p) => p,
@@ -162,7 +156,7 @@ impl ClaimHandler {
         if existing_snapshot != FixedBytes::<32>::ZERO {
             return Ok(());
         }
-        let tx = inbox.saveSnapshot().from(self.wallet.default_signer().address());
+        let tx = inbox.saveSnapshot();
         let pending = tx.send().await?;
         let receipt = pending.get_receipt().await?;
         if !receipt.status() {
