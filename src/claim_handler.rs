@@ -155,7 +155,7 @@ impl ClaimHandler {
                 Ok(p) => p,
                 Err(e) => {
                     let err_msg = e.to_string();
-                    if err_msg.contains("Claim already challenged") {
+                    if err_msg.contains("Invalid claim") {
                         return Err("Claim already challenged".into());
                     }
                     panic!("FATAL: Unexpected error challenging claim for epoch {}: {}", epoch, e);
@@ -178,7 +178,7 @@ impl ClaimHandler {
                 Ok(p) => p,
                 Err(e) => {
                     let err_msg = e.to_string();
-                    if err_msg.contains("Claim already challenged") {
+                    if err_msg.contains("Invalid claim") {
                         return Err("Claim already challenged".into());
                     }
                     panic!("FATAL: Unexpected error challenging claim for epoch {}: {}", epoch, e);
