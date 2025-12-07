@@ -205,17 +205,19 @@ echo "  OutboxMock:           $OUTBOX_MOCK"
 echo "  AMB (Mainnet):        $AMB_MAINNET"
 echo "  AMB (Gnosis):         $AMB_GNOSIS"
 
-# Take pristine snapshot (0x0) for test isolation
+# Take pristine snapshot for test isolation
 echo "Taking pristine snapshot..."
-curl -s -X POST -H "Content-Type: application/json" \
+SNAPSHOT_ID=$(curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"evm_snapshot","params":[],"id":1}' \
-  localhost:8545 > /dev/null
+  localhost:8545 | jq -r '.result')
 curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"evm_snapshot","params":[],"id":1}' \
   localhost:8546 > /dev/null
 curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"evm_snapshot","params":[],"id":1}' \
   localhost:8547 > /dev/null
+echo "$SNAPSHOT_ID" > "$(dirname "$0")/../.devnet-snapshot"
+echo "Snapshot ID: $SNAPSHOT_ID"
 
 echo "✅ Full devnet ready!"
 echo "🛑 Press Ctrl+C to stop"

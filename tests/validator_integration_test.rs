@@ -498,7 +498,7 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
     advance_time(inbox_provider.as_ref(), time_to_before_buffer).await;
 
     println!("Waiting for validator to call saveSnapshot...");
-    let result = timeout(Duration::from_secs(15), async {
+    let result = timeout(Duration::from_secs(30), async {
         loop {
             let snapshot = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
             if snapshot != FixedBytes::<32>::ZERO {

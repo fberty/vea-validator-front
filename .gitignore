@@ -28,6 +28,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Test devnet snapshot
+.devnet-snapshot
+
 # Claude IDE
 .claude/
 info

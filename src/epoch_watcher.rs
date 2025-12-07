@@ -4,7 +4,7 @@ use tokio::time::{sleep, Duration};
 use std::sync::Arc;
 use crate::claim_handler::ClaimHandler;
 
-const BEFORE_EPOCH_BUFFER: u64 = 10;
+const BEFORE_EPOCH_BUFFER: u64 = 60;
 const AFTER_EPOCH_BUFFER: u64 = 60;
 
 pub struct EpochWatcher {
@@ -32,7 +32,10 @@ impl EpochWatcher {
             let next_epoch_start = (current_epoch + 1) * epoch_period;
             let time_until_next_epoch = next_epoch_start.saturating_sub(now);
 
+            println!("[{}] Poll: epoch={}, time_until_next={}, last_before={:?}", self.route_name, current_epoch, time_until_next_epoch, last_before_epoch);
+
             if time_until_next_epoch <= BEFORE_EPOCH_BUFFER && last_before_epoch != Some(current_epoch) {
+                println!("[{}] Triggering handle_epoch_end for epoch {}", self.route_name, current_epoch);
                 self.handler.handle_epoch_end(current_epoch).await
                     .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to save snapshot for epoch {}: {}", self.route_name, current_epoch, e));
                 last_before_epoch = Some(current_epoch);
