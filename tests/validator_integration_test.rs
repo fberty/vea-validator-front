@@ -483,27 +483,9 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone());
-
-    let snapshot_saved = Arc::new(AtomicBool::new(false));
-    let snapshot_flag = snapshot_saved.clone();
-
-    let handler_clone = claim_handler.clone();
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
     let watcher_handle = tokio::spawn(async move {
-        epoch_watcher.watch_epochs(
-            epoch_period,
-            move |epoch| {
-                let handler = handler_clone.clone();
-                let flag = snapshot_flag.clone();
-                Box::pin(async move {
-                    println!("🕒 BEFORE_EPOCH_BUFFER triggered for epoch {}", epoch);
-                    handler.handle_epoch_end(epoch).await.expect("saveSnapshot failed");
-                    flag.store(true, Ordering::SeqCst);
-                    Ok(())
-                })
-            },
-            |_epoch| Box::pin(async move { Ok(()) }),
-        ).await
+        epoch_watcher.watch_epochs(epoch_period).await
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -517,7 +499,11 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
 
     println!("Waiting for validator to call saveSnapshot...");
     let result = timeout(Duration::from_secs(15), async {
-        while !snapshot_saved.load(Ordering::SeqCst) {
+        loop {
+            let snapshot = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
+            if snapshot != FixedBytes::<32>::ZERO {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await;
@@ -527,9 +513,6 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
     if result.is_err() {
         panic!("❌ VALIDATOR FAILED: Did not call saveSnapshot when BEFORE_EPOCH_BUFFER triggered");
     }
-
-    let final_snapshot = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
-    assert_ne!(final_snapshot, FixedBytes::<32>::ZERO, "Snapshot should exist after saveSnapshot");
 
     println!("\n✅ EPOCH WATCHER TEST PASSED!");
     println!("The validator correctly called saveSnapshot when time reached BEFORE_EPOCH_BUFFER");
@@ -586,35 +569,20 @@ async fn test_epoch_watcher_after_buffer_triggers_claim() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone());
-
-    let claim_submitted = Arc::new(AtomicBool::new(false));
-    let claim_flag = claim_submitted.clone();
-
-    let handler_clone = claim_handler.clone();
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
     let watcher_handle = tokio::spawn(async move {
-        epoch_watcher.watch_epochs(
-            epoch_period,
-            |_epoch| Box::pin(async move { Ok(()) }),
-            move |epoch| {
-                let handler = handler_clone.clone();
-                let flag = claim_flag.clone();
-                Box::pin(async move {
-                    println!("🕒 AFTER_EPOCH_BUFFER triggered for epoch {}", epoch);
-                    if handler.handle_after_epoch_start(epoch).await.is_ok() {
-                        flag.store(true, Ordering::SeqCst);
-                    }
-                    Ok(())
-                })
-            },
-        ).await
+        epoch_watcher.watch_epochs(epoch_period).await
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Waiting for validator to submit claim after AFTER_EPOCH_BUFFER...");
     let result = timeout(Duration::from_secs(15), async {
-        while !claim_submitted.load(Ordering::SeqCst) {
+        loop {
+            let claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
+            if claim_hash != FixedBytes::<32>::ZERO {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await;
@@ -624,9 +592,6 @@ async fn test_epoch_watcher_after_buffer_triggers_claim() {
     if result.is_err() {
         panic!("❌ VALIDATOR FAILED: Did not submit claim when AFTER_EPOCH_BUFFER triggered");
     }
-
-    let final_claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
-    assert_ne!(final_claim_hash, FixedBytes::<32>::ZERO, "Claim should exist after validator submits");
 
     println!("\n✅ EPOCH WATCHER CLAIM TEST PASSED!");
     println!("The validator correctly submitted claim when time reached AFTER_EPOCH_BUFFER");
@@ -668,27 +633,9 @@ async fn test_epoch_watcher_no_duplicate_save_snapshot() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone());
-
-    let save_called = Arc::new(AtomicBool::new(false));
-    let save_flag = save_called.clone();
-
-    let handler_clone = claim_handler.clone();
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
     let watcher_handle = tokio::spawn(async move {
-        epoch_watcher.watch_epochs(
-            epoch_period,
-            move |epoch| {
-                let handler = handler_clone.clone();
-                let flag = save_flag.clone();
-                Box::pin(async move {
-                    println!("🕒 BEFORE_EPOCH_BUFFER triggered for epoch {}", epoch);
-                    handler.handle_epoch_end(epoch).await.expect("handle_epoch_end failed");
-                    flag.store(true, Ordering::SeqCst);
-                    Ok(())
-                })
-            },
-            |_epoch| Box::pin(async move { Ok(()) }),
-        ).await
+        epoch_watcher.watch_epochs(epoch_period).await
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;

@@ -59,35 +59,13 @@ where
         route.inbox_address,
     );
     let proof_relay = Arc::new(ProofRelay::new(route.clone()));
-    let epoch_watcher = EpochWatcher::new(
-        route.inbox_provider.clone(),
-    );
     let inbox_contract = IVeaInboxArbToEth::new(route.inbox_address, route.inbox_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
     println!("[{}] Starting validator for route", route.name);
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route.name, route.inbox_address, route.outbox_address);
-    let claim_handler_for_epochs_before = claim_handler.clone();
-    let claim_handler_for_epochs_after = claim_handler.clone();
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), route.name);
     let epoch_handle = tokio::spawn(async move {
-        epoch_watcher.watch_epochs(
-            epoch_period,
-            move |epoch| {
-                let handler = claim_handler_for_epochs_before.clone();
-                Box::pin(async move {
-                    handler.handle_epoch_end(epoch).await
-                        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to save snapshot for epoch {}: {}", route.name, epoch, e));
-                    Ok(())
-                })
-            },
-            move |epoch| {
-                let handler = claim_handler_for_epochs_after.clone();
-                Box::pin(async move {
-                    handler.handle_after_epoch_start(epoch).await
-                        .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle after epoch start for epoch {}: {}", route.name, epoch, e));
-                    Ok(())
-                })
-            },
-        ).await
+        epoch_watcher.watch_epochs(epoch_period).await
     });
     let claim_handler_for_claims = claim_handler.clone();
     let bridge_resolver_for_claims = bridge_resolver.clone();
