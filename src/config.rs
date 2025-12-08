@@ -33,6 +33,9 @@ pub struct ValidatorConfig {
     pub outbox_arb_to_eth: Address,
     pub inbox_arb_to_gnosis: Address,
     pub outbox_arb_to_gnosis: Address,
+    pub router_arb_to_gnosis: Address,
+    pub arb_outbox: Address,
+    pub gnosis_amb: Address,
 }
 impl ValidatorConfig {
     pub fn build_routes(&self) -> Vec<Route> {
@@ -88,8 +91,7 @@ impl ValidatorConfig {
         let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL")
             .expect("ARBITRUM_RPC_URL must be set");
         let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-            .or_else(|_| std::env::var("MAINNET_RPC_URL"))
-            .expect("ETHEREUM_RPC_URL or MAINNET_RPC_URL must be set");
+            .expect("ETHEREUM_RPC_URL must be set");
         let gnosis_rpc = std::env::var("GNOSIS_RPC_URL")
             .expect("GNOSIS_RPC_URL must be set");
         let weth_gnosis = Address::from_str(
@@ -142,6 +144,18 @@ impl ValidatorConfig {
             &std::env::var("VEA_OUTBOX_ARB_TO_GNOSIS")
                 .expect("VEA_OUTBOX_ARB_TO_GNOSIS must be set")
         )?;
+        let router_arb_to_gnosis = Address::from_str(
+            &std::env::var("VEA_ROUTER_ARB_TO_GNOSIS")
+                .expect("VEA_ROUTER_ARB_TO_GNOSIS must be set")
+        )?;
+        let arb_outbox = Address::from_str(
+            &std::env::var("ARB_OUTBOX")
+                .expect("ARB_OUTBOX must be set")
+        )?;
+        let gnosis_amb = Address::from_str(
+            &std::env::var("GNOSIS_AMB")
+                .expect("GNOSIS_AMB must be set")
+        )?;
 
         Ok(Self {
             private_key,
@@ -151,6 +165,9 @@ impl ValidatorConfig {
             outbox_arb_to_eth,
             inbox_arb_to_gnosis,
             outbox_arb_to_gnosis,
+            router_arb_to_gnosis,
+            arb_outbox,
+            gnosis_amb,
         })
     }
 }
