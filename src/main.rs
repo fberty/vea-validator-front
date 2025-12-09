@@ -93,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let wallet_address = wallet.default_signer().address();
 
     let l2_to_l1_finder = L2ToL1Finder::new(arb_to_eth_route.inbox_provider.clone())
-        .add_target(arb_to_eth_route.outbox_address, "schedules/arb_to_eth_relay.json")
-        .add_target(c.router_arb_to_gnosis, "schedules/arb_to_gnosis_relay.json");
+        .add_inbox(arb_to_eth_route.inbox_address, "schedules/arb_to_eth_relay.json")
+        .add_inbox(arb_to_gnosis_route.inbox_address, "schedules/arb_to_gnosis_relay.json");
 
     let amb_finder = AmbFinder::new(
         arb_to_eth_route.outbox_provider.clone(),
@@ -104,14 +104,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let arb_to_eth_relay_handler = ArbRelayHandler::new(
         arb_to_eth_route.outbox_provider.clone(),
-        arb_to_eth_route.inbox_provider.clone(),
         c.arb_outbox,
         "schedules/arb_to_eth_relay.json",
     );
 
     let arb_to_gnosis_relay_handler = ArbRelayHandler::new(
         arb_to_eth_route.outbox_provider.clone(),
-        arb_to_gnosis_route.inbox_provider.clone(),
         c.arb_outbox,
         "schedules/arb_to_gnosis_relay.json",
     );

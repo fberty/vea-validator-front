@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, Bytes, FixedBytes, U256};
+use alloy::primitives::{FixedBytes, U256};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -50,22 +50,21 @@ where
     }
 }
 
+use alloy::primitives::{Address, Bytes};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArbToL1Task {
     pub epoch: u64,
     #[serde(with = "u256_hex")]
     pub position: U256,
     pub execute_after: u64,
-    pub destination: Address,
-    pub caller: Address,
+    pub l2_sender: Address,
+    pub dest_addr: Address,
+    pub l2_block: u64,
+    pub l1_block: u64,
+    pub l2_timestamp: u64,
     #[serde(with = "u256_hex")]
-    pub arb_block_num: U256,
-    #[serde(with = "u256_hex")]
-    pub eth_block_num: U256,
-    #[serde(with = "u256_hex")]
-    pub l2_timestamp: U256,
-    #[serde(with = "u256_hex")]
-    pub callvalue: U256,
+    pub amount: U256,
     #[serde(with = "bytes_hex")]
     pub data: Bytes,
 }
@@ -98,15 +97,15 @@ mod u256_hex {
 }
 
 mod bytes_hex {
-    use alloy::primitives::Bytes;
     use alloy::hex;
+    use alloy::primitives::Bytes;
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Bytes, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{}", value))
+        serializer.serialize_str(&format!("0x{}", hex::encode(value)))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Bytes, D::Error>

@@ -75,7 +75,7 @@ SEQ_INBOX="$(
 )"
 
 OUTBOX_MOCK="$(
-  create contracts/src/test/bridge-mocks/arbitrum/OutboxMock.sol:OutboxMock \
+  create contracts/src/test/bridge-mocks/arbitrum/OutboxMockForValidator.sol:OutboxMockForValidator \
     "$ETH_RPC" \
     --constructor-args "$INBOX_PREDICTED" | addr_of
 )"
@@ -99,11 +99,26 @@ OUTBOX="$(
       10 | addr_of
 )"
 
-# Deploy ArbSys mock to the precompile address on Arbitrum devnet
+# Deploy ArbSys mock - deploy normally first, then copy bytecode to precompile address
+# (anvil_setCode with forge inspect bytecode doesn't emit events properly)
 echo "Deploying ArbSys mock..."
-ARBSYS_BYTECODE="$(forge inspect contracts/src/test/bridge-mocks/arbitrum/ArbSysMock.sol:ArbSysMock bytecode)"
-cast rpc anvil_setCode 0x0000000000000000000000000000000000000064 "$ARBSYS_BYTECODE" --rpc-url "$ARB_RPC" >/dev/null
+ARBSYS_DEPLOYED="$(
+  create contracts/src/test/bridge-mocks/arbitrum/ArbSysMockForValidator.sol:ArbSysMockForValidator \
+    "$ARB_RPC" | addr_of
+)"
+ARBSYS_RUNTIME="$(cast code "$ARBSYS_DEPLOYED" --rpc-url "$ARB_RPC")"
+cast rpc anvil_setCode 0x0000000000000000000000000000000000000064 "$ARBSYS_RUNTIME" --rpc-url "$ARB_RPC" >/dev/null
 echo "ArbSys mock deployed at 0x0000000000000000000000000000000000000064"
+
+# Deploy NodeInterface mock - same approach
+echo "Deploying NodeInterface mock..."
+NODE_DEPLOYED="$(
+  create contracts/src/test/bridge-mocks/arbitrum/NodeInterfaceMock.sol:NodeInterfaceMock \
+    "$ARB_RPC" | addr_of
+)"
+NODE_RUNTIME="$(cast code "$NODE_DEPLOYED" --rpc-url "$ARB_RPC")"
+cast rpc anvil_setCode 0x00000000000000000000000000000000000000C8 "$NODE_RUNTIME" --rpc-url "$ARB_RPC" >/dev/null
+echo "NodeInterface mock deployed at 0x00000000000000000000000000000000000000C8"
 
 INBOX="$(
   create contracts/src/arbitrumToEth/VeaInboxArbToEth.sol:VeaInboxArbToEth \
