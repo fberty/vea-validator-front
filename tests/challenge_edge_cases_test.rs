@@ -39,10 +39,6 @@ async fn test_challenge_uses_correct_root_from_inbox() {
     assert_ne!(correct_root, FixedBytes::<32>::ZERO, "Snapshot should be saved");
     println!("Saved snapshot for epoch {}", current_epoch);
 
-    // Get inbox timestamp as source of truth for syncing
-    let inbox_block = inbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
-    let inbox_timestamp = inbox_block.header.timestamp;
-
     // Advance inbox to next epoch
     advance_time(inbox_provider.as_ref(), epoch_period + 70).await;
 
@@ -65,7 +61,6 @@ async fn test_challenge_uses_correct_root_from_inbox() {
         println!("This indicates the Anvil instances drifted. Attempting to continue anyway...");
     }
 
-    let target_epoch = current_epoch;
     let synced_outbox_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let synced_timestamp = synced_outbox_block.header.timestamp;
     println!("After sync - Outbox timestamp: {}, Claimable epoch: {}", synced_timestamp, synced_timestamp / epoch_period - 1);
@@ -91,7 +86,6 @@ async fn test_weth_approval_set_on_startup_if_missing() {
     let route = &routes[1];
 
     let outbox_provider = Arc::new(route.outbox_provider.clone());
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
     restore_pristine().await;
 
     let weth_addr = route.weth_address.expect("Gnosis should use WETH");
@@ -122,7 +116,6 @@ async fn test_weth_approval_skipped_if_already_exists() {
     let route = &routes[1];
 
     let outbox_provider = Arc::new(route.outbox_provider.clone());
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
     restore_pristine().await;
 
     let weth_addr = route.weth_address.expect("Gnosis should use WETH");

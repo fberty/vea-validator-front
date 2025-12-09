@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::{timeout, Duration};
 use vea_validator::{
-    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH, Claim, Party},
+    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH},
     event_listener::{EventListener, ClaimEvent},
     claim_handler::ClaimHandler,
     config::ValidatorConfig,
@@ -145,9 +145,9 @@ async fn test_validator_detects_and_challenges_wrong_claim() {
 
 #[tokio::test]
 #[serial]
-async fn test_validator_triggers_bridge_resolution() {
+async fn test_validator_starts_bridging() {
     println!("\n==============================================");
-    println!("VALIDATOR INTEGRATION TEST: Bridge Resolution");
+    println!("VALIDATOR INTEGRATION TEST: Start Bridging");
     println!("==============================================\n");
 
     let c = ValidatorConfig::from_env().expect("Failed to load config");
@@ -197,61 +197,17 @@ async fn test_validator_triggers_bridge_resolution() {
         advance_time(outbox_provider.as_ref(), advance_amount).await;
     }
 
-    println!("\n--- Creating Bridge Resolver (from main.rs) ---");
-    let wallet_address = c.wallet.default_signer().address();
-    let inbox_provider_clone = route.inbox_provider.clone();
-    let inbox_addr = route.inbox_address;
-
-    let bridge_resolver_called = Arc::new(AtomicBool::new(false));
-    let bridge_flag = bridge_resolver_called.clone();
-
-    let bridge_resolver = move |epoch: u64, claim: ClaimEvent| {
-        let provider = inbox_provider_clone.clone();
-        let inbox = inbox_addr;
-        let wlt_addr = wallet_address;
-        let flag = bridge_flag.clone();
-
-        async move {
-            println!("🌉 Bridge resolver triggered for epoch {}!", epoch);
-
-            let inbox_contract = IVeaInboxArbToEth::new(inbox, provider);
-
-            let outbox_claim = Claim {
-                stateRoot: claim.state_root,
-                claimer: claim.claimer,
-                timestampClaimed: claim.timestamp_claimed,
-                timestampVerification: 0,
-                blocknumberVerification: 0,
-                honest: Party::None,
-                challenger: wlt_addr,
-            };
-
-            let tx = inbox_contract.sendSnapshot(U256::from(epoch), outbox_claim);
-
-            let pending = tx.send().await?;
-            let receipt = pending.get_receipt().await?;
-
-            if !receipt.status() {
-                return Err(Box::<dyn std::error::Error + Send + Sync>::from("sendSnapshot transaction failed"));
-            }
-
-            println!("✅ sendSnapshot called successfully! Transaction: {:?}", receipt.transaction_hash);
-            flag.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-    };
-
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
     let event_listener = EventListener::new(route.outbox_provider.clone(), route.outbox_address);
 
-    let claim_handler_clone = claim_handler.clone();
-    let resolver = bridge_resolver.clone();
+    let bridge_resolution_triggered = Arc::new(AtomicBool::new(false));
+    let bridge_flag = bridge_resolution_triggered.clone();
 
+    let claim_handler_clone = claim_handler.clone();
     let watch_handle = tokio::spawn(async move {
         event_listener.watch_claims(move |event: ClaimEvent| {
             let handler = claim_handler_clone.clone();
-            let resolver_clone = resolver.clone();
+            let flag = bridge_flag.clone();
 
             Box::pin(async move {
                 println!("📡 Detected claim for epoch {}", event.epoch);
@@ -264,8 +220,10 @@ async fn test_validator_triggers_bridge_resolution() {
                         if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
                             eprintln!("Challenge failed: {}", e);
                         } else {
-                            if let Err(e) = resolver_clone(epoch, event.clone()).await {
-                                eprintln!("Bridge resolution failed: {}", e);
+                            if let Err(e) = handler.start_bridging(epoch, &event).await {
+                                eprintln!("Start bridging failed: {}", e);
+                            } else {
+                                flag.store(true, Ordering::SeqCst);
                             }
                         }
                     }
@@ -290,7 +248,7 @@ async fn test_validator_triggers_bridge_resolution() {
     println!("\n--- Waiting for validator to trigger bridge resolution... ---");
 
     let result = timeout(Duration::from_secs(5), async {
-        while !bridge_resolver_called.load(Ordering::SeqCst) {
+        while !bridge_resolution_triggered.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await;
@@ -301,13 +259,12 @@ async fn test_validator_triggers_bridge_resolution() {
         panic!("❌ VALIDATOR FAILED: Did not trigger bridge resolution within 5 seconds");
     }
 
-    println!("\n✅✅✅ BRIDGE RESOLUTION TEST PASSED! ✅✅✅");
+    println!("\n✅✅✅ START BRIDGING TEST PASSED! ✅✅✅");
     println!("The validator:");
     println!("  1. Detected the malicious claim");
     println!("  2. Challenged it");
-    println!("  3. Automatically triggered bridge resolution via sendSnapshot");
-    println!("\nThis proves the validator's complete workflow!");
-    println!("Note: Full bridge message delivery (7-day delay) is not tested here");
+    println!("  3. Called ClaimHandler::start_bridging()");
+    println!("\nNote: Full bridge relay (7-day delay + executeTransaction) not tested here");
 
 }
 
@@ -449,9 +406,9 @@ async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
 
 #[tokio::test]
 #[serial]
-async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
+async fn test_epoch_watcher_saves_snapshot_before_epoch_ends() {
     println!("\n==============================================");
-    println!("EPOCH WATCHER TEST: Before Buffer → saveSnapshot");
+    println!("EPOCH WATCHER TEST: Saves Snapshot Before Epoch Ends");
     println!("==============================================\n");
 
     let c = ValidatorConfig::from_env().expect("Failed to load config");
@@ -459,7 +416,6 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
     let route = &routes[0];
 
     let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
 
     restore_pristine().await;
 
@@ -521,9 +477,9 @@ async fn test_epoch_watcher_before_buffer_triggers_save_snapshot() {
 
 #[tokio::test]
 #[serial]
-async fn test_epoch_watcher_after_buffer_triggers_claim() {
+async fn test_epoch_watcher_after_epoch_verifies_claim() {
     println!("\n==============================================");
-    println!("EPOCH WATCHER TEST: After Buffer → Claim");
+    println!("EPOCH WATCHER TEST: Verifies Claim After Epoch");
     println!("==============================================\n");
 
     let c = ValidatorConfig::from_env().expect("Failed to load config");
@@ -610,7 +566,6 @@ async fn test_epoch_watcher_no_duplicate_save_snapshot() {
     let route = &routes[0];
 
     let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
 
     restore_pristine().await;
 

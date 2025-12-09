@@ -25,9 +25,9 @@ async fn handle_invalid_claim(
     println!("[{}] Challenging incorrect claim for epoch {}", route, epoch);
     match handler.challenge_claim(epoch, make_claim(&incorrect_claim)).await {
         Ok(()) => {
-            println!("[{}] Challenge successful, triggering bridge resolution for epoch {}", route, epoch);
-            handler.trigger_bridge_resolution(epoch, &incorrect_claim).await
-                .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to trigger bridge resolution for epoch {}: {}", route, epoch, e));
+            println!("[{}] Challenge successful, starting bridging for epoch {}", route, epoch);
+            handler.start_bridging(epoch, &incorrect_claim).await
+                .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to start bridging for epoch {}: {}", route, epoch, e));
         }
         Err(_) => {
             println!("[{}] Claim already challenged by another validator - bridge is safe", route);

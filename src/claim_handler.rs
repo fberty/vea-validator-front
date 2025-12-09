@@ -219,21 +219,21 @@ impl ClaimHandler {
         }
     }
 
-    pub async fn trigger_bridge_resolution(&self, epoch: u64, claim: &ClaimEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_bridging(&self, epoch: u64, claim: &ClaimEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let claim_struct = make_claim(claim);
         match self.route.name {
             "ARB_TO_ETH" => {
-                println!("[{}] Triggering bridge resolution for epoch {}", self.route.name, epoch);
+                println!("[{}] Starting bridging for epoch {}", self.route.name, epoch);
                 let inbox = IVeaInboxArbToEth::new(self.route.inbox_address, self.route.inbox_provider.clone());
                 let tx = inbox.sendSnapshot(U256::from(epoch), claim_struct);
                 let receipt = tx.send().await?.get_receipt().await?;
                 if !receipt.status() {
                     return Err("sendSnapshot transaction failed".into());
                 }
-                println!("[{}] Bridge resolution triggered successfully for epoch {}", self.route.name, epoch);
+                println!("[{}] Bridging started for epoch {}", self.route.name, epoch);
             }
             "ARB_TO_GNOSIS" => {
-                println!("[{}] Triggering bridge resolution for epoch {}", self.route.name, epoch);
+                println!("[{}] Starting bridging for epoch {}", self.route.name, epoch);
                 let inbox = IVeaInboxArbToGnosis::new(self.route.inbox_address, self.route.inbox_provider.clone());
                 let gas_limit = U256::from(2_000_000u64);
                 let tx = inbox.sendSnapshot(U256::from(epoch), gas_limit, claim_struct);
@@ -241,7 +241,7 @@ impl ClaimHandler {
                 if !receipt.status() {
                     return Err("sendSnapshot transaction failed".into());
                 }
-                println!("[{}] Bridge resolution triggered successfully for epoch {}", self.route.name, epoch);
+                println!("[{}] Bridging started for epoch {}", self.route.name, epoch);
             }
             _ => {
                 panic!("Unknown route: {}", self.route.name);
