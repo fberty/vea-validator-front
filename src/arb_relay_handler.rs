@@ -1,5 +1,5 @@
-use alloy::primitives::Address;
-use alloy::providers::DynProvider;
+use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::providers::{DynProvider, Provider};
 use alloy::network::Ethereum;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
@@ -35,14 +35,14 @@ impl ArbRelayHandler {
         }
     }
 
-    async fn process_pending(&self) {
+    pub async fn process_pending(&self) {
         let schedule_file: ScheduleFile<ArbToL1Task> = ScheduleFile::new(&self.schedule_path);
         let mut schedule = schedule_file.load();
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = match self.eth_provider.get_block_by_number(Default::default()).await {
+            Ok(Some(block)) => block.header.timestamp,
+            _ => return,
+        };
 
         let ready: Vec<ArbToL1Task> = schedule
             .pending
@@ -55,7 +55,7 @@ impl ArbRelayHandler {
             return;
         }
 
-        println!("[ArbRelayHandler] Checking {} tasks for relay status", ready.len());
+        println!("[ArbRelayHandler] Processing {} ready tasks", ready.len());
 
         let outbox = IOutbox::new(self.outbox_address, self.eth_provider.clone());
 
@@ -63,16 +63,58 @@ impl ArbRelayHandler {
             match outbox.isSpent(task.position).call().await {
                 Ok(is_spent) if is_spent => {
                     println!(
-                        "[ArbRelayHandler] Epoch {} successfully relayed (position {:#x})",
+                        "[ArbRelayHandler] Epoch {} already relayed (position {:#x})",
                         task.epoch, task.position
                     );
                     schedule.pending.retain(|t| t.epoch != task.epoch);
                 }
                 Ok(_) => {
-                    eprintln!(
-                        "[ArbRelayHandler] WARNING: Epoch {} NOT relayed after delay! (position {:#x})",
+                    println!(
+                        "[ArbRelayHandler] Executing relay for epoch {} (position {:#x})",
                         task.epoch, task.position
                     );
+
+                    let empty_proof: Vec<FixedBytes<32>> = vec![];
+
+                    match outbox
+                        .executeTransaction(
+                            empty_proof,
+                            task.position,
+                            task.l2_sender,
+                            task.dest_addr,
+                            U256::from(task.l2_block),
+                            U256::from(task.l1_block),
+                            U256::from(task.l2_timestamp),
+                            task.amount,
+                            task.data.clone(),
+                        )
+                        .send()
+                        .await
+                    {
+                        Ok(pending) => {
+                            match pending.get_receipt().await {
+                                Ok(receipt) => {
+                                    println!(
+                                        "[ArbRelayHandler] Epoch {} relayed successfully! tx: {:?}",
+                                        task.epoch, receipt.transaction_hash
+                                    );
+                                    schedule.pending.retain(|t| t.epoch != task.epoch);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[ArbRelayHandler] Epoch {} tx failed to confirm: {}",
+                                        task.epoch, e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[ArbRelayHandler] Failed to execute relay for epoch {}: {}",
+                                task.epoch, e
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!(

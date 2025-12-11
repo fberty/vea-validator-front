@@ -324,23 +324,40 @@ async fn test_full_arb_to_eth_relay_flow() {
 
     println!("Phase 4: L2ToL1Finder discovered task - epoch {}, ticketId {:#x}", task.epoch, task.position);
 
-    println!("Phase 5: Advancing time by 7 days for relay delay...");
+    let arb_outbox_contract = IOutbox::new(arb_outbox, outbox_provider.clone());
+    let is_spent_before = arb_outbox_contract.isSpent(task.position).call().await.unwrap();
+    assert!(!is_spent_before, "Position should NOT be spent before relay");
+    println!("Phase 5: Verified position {:#x} is not spent yet", task.position);
+
+    println!("Phase 6: Advancing time by 7 days for relay delay...");
     let relay_delay = 7 * 24 * 3600 + 100;
     advance_time(inbox_provider.as_ref(), relay_delay).await;
     advance_time(outbox_provider.as_ref(), relay_delay).await;
 
-    let _handler = ArbRelayHandler::new(
+    let handler = ArbRelayHandler::new(
         route.outbox_provider.clone(),
         arb_outbox,
         &schedule_path,
     );
 
-    println!("Phase 6: ArbRelayHandler created");
+    println!("Phase 7: Calling process_pending() to execute relay...");
+    handler.process_pending().await;
 
-    println!("\nFULL ARB TO ETH RELAY FLOW TEST COMPLETED!");
+    let is_spent_after = arb_outbox_contract.isSpent(task.position).call().await.unwrap();
+    assert!(is_spent_after, "Position SHOULD be spent after relay");
+    println!("Phase 8: Verified position {:#x} IS spent after relay!", task.position);
+
+    let schedule_after: ScheduleData<ArbToL1Task> = ScheduleFile::new(&schedule_path).load();
+    assert!(schedule_after.pending.is_empty(), "Schedule should be empty after successful relay");
+    println!("Phase 9: Verified schedule is now empty");
+
+    println!("\nFULL ARB TO ETH RELAY FLOW TEST PASSED!");
     println!("Successfully verified:");
     println!("  1. sendSnapshot emits SnapshotSent event");
     println!("  2. L2ToL1Finder discovers and schedules the task");
-    println!("  3. Task has correct epoch, ticketId, execute_after");
+    println!("  3. Task has correct epoch, position, execute_after");
     println!("  4. Time advancement works for 7-day delay");
+    println!("  5. ArbRelayHandler.process_pending() executes the relay");
+    println!("  6. Outbox.isSpent() returns true after relay");
+    println!("  7. Task is removed from schedule after successful relay");
 }
