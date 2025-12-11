@@ -11,7 +11,8 @@ use vea_validator::{
     config::ValidatorConfig,
     l2_to_l1_finder::L2ToL1Finder,
     arb_relay_handler::ArbRelayHandler,
-    scheduler::{ScheduleFile, ScheduleData, ArbToL1Task},
+    claim_finder::ClaimFinder,
+    scheduler::{ScheduleFile, ScheduleData, ArbToL1Task, VerificationTask, VerificationPhase},
 };
 use common::{restore_pristine, advance_time, Provider};
 use alloy::providers::DynProvider;
@@ -527,4 +528,193 @@ async fn test_full_arb_to_eth_relay_flow() {
     println!("  5. ArbRelayHandler.process_pending() executes the relay");
     println!("  6. Outbox.isSpent() returns true after relay");
     println!("  7. Task is removed from schedule after successful relay");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_claim_finder_challenges_invalid_claim() {
+    println!("\n==============================================");
+    println!("CLAIM FINDER TEST: Challenges Invalid Claim");
+    println!("==============================================\n");
+
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
+    let routes = c.build_routes();
+    let route = &routes[0];
+
+    let inbox_provider = Arc::new(route.inbox_provider.clone());
+    let outbox_provider = Arc::new(route.outbox_provider.clone());
+
+    restore_pristine().await;
+
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
+    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
+
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+
+    for i in 0..3 {
+        let test_message = alloy::primitives::Bytes::from(vec![0xDE, 0xAD, i]);
+        inbox.sendMessage(
+            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+            test_message
+        ).send().await.unwrap().get_receipt().await.unwrap();
+    }
+
+    let target_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(target_epoch)).call().await.unwrap();
+    println!("Saved snapshot for epoch {} with correct root: {:?}", target_epoch, correct_root);
+
+    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+
+    let wrong_root = FixedBytes::<32>::from([0x99; 32]);
+    let deposit = outbox.deposit().call().await.unwrap();
+
+    outbox.claim(U256::from(target_epoch), wrong_root)
+        .value(deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("Submitted WRONG claim for epoch {}", target_epoch);
+
+    let original_claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
+    println!("Original claim hash: {:?}", original_claim_hash);
+
+    advance_time(outbox_provider.as_ref(), 16 * 60).await;
+
+    let tmp_dir = tempdir().unwrap();
+    let schedule_path = tmp_dir.path().join("verification.json");
+
+    let wallet_address = c.wallet.default_signer().address();
+
+    let finder = ClaimFinder::new(
+        route.inbox_provider.clone(),
+        route.outbox_provider.clone(),
+        route.inbox_address,
+        route.outbox_address,
+        None,
+        wallet_address,
+        &schedule_path,
+        "TEST",
+    );
+
+    let finder_handle = tokio::spawn(async move {
+        finder.run().await;
+    });
+
+    let result = timeout(Duration::from_secs(30), async {
+        loop {
+            let claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
+            if claim_hash != original_claim_hash {
+                println!("Claim hash changed to: {:?}", claim_hash);
+                return true;
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await;
+
+    finder_handle.abort();
+
+    assert!(result.is_ok(), "ClaimFinder should have challenged the invalid claim (claim hash should change)");
+    println!("\nCLAIM FINDER CHALLENGE TEST PASSED!");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_claim_finder_schedules_valid_claim_verification() {
+    println!("\n==============================================");
+    println!("CLAIM FINDER TEST: Schedules Valid Claim Verification");
+    println!("==============================================\n");
+
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
+    let routes = c.build_routes();
+    let route = &routes[0];
+
+    let inbox_provider = Arc::new(route.inbox_provider.clone());
+    let outbox_provider = Arc::new(route.outbox_provider.clone());
+
+    restore_pristine().await;
+
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
+    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
+
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+
+    for i in 0..3 {
+        let test_message = alloy::primitives::Bytes::from(vec![0xBE, 0xEF, i]);
+        inbox.sendMessage(
+            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+            test_message
+        ).send().await.unwrap().get_receipt().await.unwrap();
+    }
+
+    let target_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(target_epoch)).call().await.unwrap();
+    println!("Saved snapshot for epoch {} with root: {:?}", target_epoch, correct_root);
+
+    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+
+    let deposit = outbox.deposit().call().await.unwrap();
+    outbox.claim(U256::from(target_epoch), correct_root)
+        .value(deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("Submitted VALID claim for epoch {}", target_epoch);
+
+    advance_time(outbox_provider.as_ref(), 16 * 60).await;
+
+    let tmp_dir = tempdir().unwrap();
+    let schedule_path = tmp_dir.path().join("verification.json");
+
+    let wallet_address = c.wallet.default_signer().address();
+
+    let finder = ClaimFinder::new(
+        route.inbox_provider.clone(),
+        route.outbox_provider.clone(),
+        route.inbox_address,
+        route.outbox_address,
+        None,
+        wallet_address,
+        &schedule_path,
+        "TEST",
+    );
+
+    let finder_handle = tokio::spawn(async move {
+        finder.run().await;
+    });
+
+    let result = timeout(Duration::from_secs(30), async {
+        loop {
+            let schedule_file: ScheduleFile<VerificationTask> = ScheduleFile::new(&schedule_path);
+            let schedule = schedule_file.load();
+            if let Some(task) = schedule.pending.iter().find(|t| t.epoch == target_epoch) {
+                return task.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await;
+
+    finder_handle.abort();
+
+    match result {
+        Ok(task) => {
+            println!("\nClaimFinder scheduled verification task:");
+            println!("  epoch: {}", task.epoch);
+            println!("  phase: {:?}", task.phase);
+            println!("  execute_after: {}", task.execute_after);
+            println!("  state_root: {:?}", task.state_root);
+
+            assert_eq!(task.epoch, target_epoch, "Epoch should match");
+            assert!(matches!(task.phase, VerificationPhase::StartVerification), "Phase should be StartVerification");
+            assert_eq!(task.state_root, correct_root, "State root should match");
+            assert!(task.execute_after > 0, "execute_after should be set");
+
+            println!("\nCLAIM FINDER VALID CLAIM SCHEDULING TEST PASSED!");
+        }
+        Err(_) => {
+            panic!("ClaimFinder did not schedule verification task within 30 seconds");
+        }
+    }
 }
