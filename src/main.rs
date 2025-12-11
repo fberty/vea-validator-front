@@ -103,12 +103,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let arb_to_eth_relay_handler = ArbRelayHandler::new(
+        arb_to_eth_route.inbox_provider.clone(),
         arb_to_eth_route.outbox_provider.clone(),
         c.arb_outbox,
         "schedules/arb_to_eth_relay.json",
     );
 
     let arb_to_gnosis_relay_handler = ArbRelayHandler::new(
+        arb_to_gnosis_route.inbox_provider.clone(),
         arb_to_eth_route.outbox_provider.clone(),
         c.arb_outbox,
         "schedules/arb_to_gnosis_relay.json",

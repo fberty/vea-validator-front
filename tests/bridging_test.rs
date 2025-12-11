@@ -335,6 +335,7 @@ async fn test_full_arb_to_eth_relay_flow() {
     advance_time(outbox_provider.as_ref(), relay_delay).await;
 
     let handler = ArbRelayHandler::new(
+        route.inbox_provider.clone(),
         route.outbox_provider.clone(),
         arb_outbox,
         &schedule_path,

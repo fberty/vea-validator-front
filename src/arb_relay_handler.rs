@@ -4,12 +4,15 @@ use alloy::network::Ethereum;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
-use crate::contracts::IOutbox;
+use crate::contracts::{IArbSys, INodeInterface, IOutbox};
 use crate::scheduler::{ArbToL1Task, ScheduleFile};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
+const NODE_INTERFACE: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xC8]);
 
 pub struct ArbRelayHandler {
+    arb_provider: DynProvider<Ethereum>,
     eth_provider: DynProvider<Ethereum>,
     outbox_address: Address,
     schedule_path: PathBuf,
@@ -17,11 +20,13 @@ pub struct ArbRelayHandler {
 
 impl ArbRelayHandler {
     pub fn new(
+        arb_provider: DynProvider<Ethereum>,
         eth_provider: DynProvider<Ethereum>,
         outbox_address: Address,
         schedule_path: impl Into<PathBuf>,
     ) -> Self {
         Self {
+            arb_provider,
             eth_provider,
             outbox_address,
             schedule_path: schedule_path.into(),
@@ -74,11 +79,20 @@ impl ArbRelayHandler {
                         task.epoch, task.position
                     );
 
-                    let empty_proof: Vec<FixedBytes<32>> = vec![];
+                    let proof = match self.fetch_outbox_proof(task.position).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!(
+                                "[ArbRelayHandler] Failed to fetch proof for epoch {}: {}",
+                                task.epoch, e
+                            );
+                            continue;
+                        }
+                    };
 
                     match outbox
                         .executeTransaction(
-                            empty_proof,
+                            proof,
                             task.position,
                             task.l2_sender,
                             task.dest_addr,
@@ -126,5 +140,20 @@ impl ArbRelayHandler {
         }
 
         schedule_file.save(&schedule);
+    }
+
+    async fn fetch_outbox_proof(
+        &self,
+        position: U256,
+    ) -> Result<Vec<FixedBytes<32>>, Box<dyn std::error::Error + Send + Sync>> {
+        let arb_sys = IArbSys::new(ARB_SYS, self.arb_provider.clone());
+        let state = arb_sys.sendMerkleTreeState().call().await?;
+        let size = state.size.to::<u64>();
+
+        let node_interface = INodeInterface::new(NODE_INTERFACE, self.arb_provider.clone());
+        let leaf = position.to::<u64>();
+        let result = node_interface.constructOutboxProof(size, leaf).call().await?;
+
+        Ok(result.proof)
     }
 }
