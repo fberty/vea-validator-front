@@ -12,6 +12,7 @@ use vea_validator::{
     l2_to_l1_finder::L2ToL1Finder,
     arb_relay_handler::ArbRelayHandler,
     claim_finder::ClaimFinder,
+    verification_handler::VerificationHandler,
     scheduler::{ScheduleFile, ScheduleData, ArbToL1Task, VerificationTask, VerificationPhase},
 };
 use common::{restore_pristine, advance_time, Provider};
@@ -717,4 +718,212 @@ async fn test_claim_finder_schedules_valid_claim_verification() {
             panic!("ClaimFinder did not schedule verification task within 30 seconds");
         }
     }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_verification_handler_calls_start_verification() {
+    println!("\n==============================================");
+    println!("VERIFICATION HANDLER TEST: Calls startVerification");
+    println!("==============================================\n");
+
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
+    let routes = c.build_routes();
+    let route = &routes[0];
+
+    let inbox_provider = Arc::new(route.inbox_provider.clone());
+    let outbox_provider = Arc::new(route.outbox_provider.clone());
+
+    restore_pristine().await;
+
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
+    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
+
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+    let seq_delay: u64 = outbox.sequencerDelayLimit().call().await.unwrap().try_into().unwrap();
+
+    for i in 0..3 {
+        let test_message = alloy::primitives::Bytes::from(vec![0xAA, 0xBB, i]);
+        inbox.sendMessage(
+            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+            test_message
+        ).send().await.unwrap().get_receipt().await.unwrap();
+    }
+
+    let target_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(target_epoch)).call().await.unwrap();
+    println!("Saved snapshot for epoch {} with root: {:?}", target_epoch, correct_root);
+
+    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+
+    let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let claim_timestamp = eth_block.header.timestamp;
+
+    let deposit = outbox.deposit().call().await.unwrap();
+    outbox.claim(U256::from(target_epoch), correct_root)
+        .value(deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("Submitted valid claim for epoch {}", target_epoch);
+
+    let wallet_address = c.wallet.default_signer().address();
+
+    let tmp_dir = tempdir().unwrap();
+    let schedule_path = tmp_dir.path().join("verification.json");
+
+    let schedule_file: ScheduleFile<VerificationTask> = ScheduleFile::new(&schedule_path);
+    let mut schedule = ScheduleData::default();
+    schedule.pending.push(VerificationTask {
+        epoch: target_epoch,
+        execute_after: 0,
+        phase: VerificationPhase::StartVerification,
+        state_root: correct_root,
+        claimer: wallet_address,
+        timestamp_claimed: claim_timestamp as u32,
+        timestamp_verification: 0,
+        blocknumber_verification: 0,
+    });
+    schedule_file.save(&schedule);
+    println!("Pre-seeded schedule with StartVerification task for epoch {}", target_epoch);
+
+    advance_time(inbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+
+    let handler = VerificationHandler::new(
+        route.outbox_provider.clone(),
+        route.outbox_address,
+        None,
+        &schedule_path,
+        "TEST",
+    );
+
+    handler.process_pending().await;
+
+    let schedule_after = schedule_file.load();
+    assert!(schedule_after.pending.is_empty(), "Task should be removed from schedule after startVerification");
+
+    let claim_hash_after = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
+    assert!(claim_hash_after != FixedBytes::<32>::ZERO, "Claim hash should be updated after startVerification");
+    println!("startVerification succeeded - claim hash: {:?}", claim_hash_after);
+
+    println!("\nVERIFICATION HANDLER START_VERIFICATION TEST PASSED!");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_verification_handler_calls_verify_snapshot() {
+    println!("\n==============================================");
+    println!("VERIFICATION HANDLER TEST: Calls verifySnapshot");
+    println!("==============================================\n");
+
+    let c = ValidatorConfig::from_env().expect("Failed to load config");
+    let routes = c.build_routes();
+    let route = &routes[0];
+
+    let inbox_provider = Arc::new(route.inbox_provider.clone());
+    let outbox_provider = Arc::new(route.outbox_provider.clone());
+
+    restore_pristine().await;
+
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
+    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
+
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+    let seq_delay: u64 = outbox.sequencerDelayLimit().call().await.unwrap().try_into().unwrap();
+    let min_challenge: u64 = outbox.minChallengePeriod().call().await.unwrap().try_into().unwrap();
+
+    let latest_before: u64 = outbox.latestVerifiedEpoch().call().await.unwrap().try_into().unwrap();
+    println!("latestVerifiedEpoch before: {}", latest_before);
+
+    for i in 0..3 {
+        let test_message = alloy::primitives::Bytes::from(vec![0xCC, 0xDD, i]);
+        inbox.sendMessage(
+            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+            test_message
+        ).send().await.unwrap().get_receipt().await.unwrap();
+    }
+
+    let target_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(target_epoch)).call().await.unwrap();
+    println!("Saved snapshot for epoch {} with root: {:?}", target_epoch, correct_root);
+
+    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+
+    let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let claim_timestamp = eth_block.header.timestamp;
+
+    let deposit = outbox.deposit().call().await.unwrap();
+    outbox.claim(U256::from(target_epoch), correct_root)
+        .value(deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("Submitted valid claim for epoch {}", target_epoch);
+
+    let wallet_address = c.wallet.default_signer().address();
+
+    advance_time(inbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+    advance_time(outbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+
+    let claim_for_start = Claim {
+        stateRoot: correct_root,
+        claimer: wallet_address,
+        timestampClaimed: claim_timestamp as u32,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: Party::None,
+        challenger: Address::ZERO,
+    };
+
+    outbox.startVerification(U256::from(target_epoch), claim_for_start)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("startVerification called manually");
+
+    let verif_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let verif_ts = verif_block.header.timestamp as u32;
+    let verif_bn = verif_block.header.number as u32;
+
+    let tmp_dir = tempdir().unwrap();
+    let schedule_path = tmp_dir.path().join("verification.json");
+
+    let schedule_file: ScheduleFile<VerificationTask> = ScheduleFile::new(&schedule_path);
+    let mut schedule = ScheduleData::default();
+    schedule.pending.push(VerificationTask {
+        epoch: target_epoch,
+        execute_after: 0,
+        phase: VerificationPhase::VerifySnapshot,
+        state_root: correct_root,
+        claimer: wallet_address,
+        timestamp_claimed: claim_timestamp as u32,
+        timestamp_verification: verif_ts,
+        blocknumber_verification: verif_bn,
+    });
+    schedule_file.save(&schedule);
+    println!("Pre-seeded schedule with VerifySnapshot task for epoch {}", target_epoch);
+
+    advance_time(inbox_provider.as_ref(), min_challenge + 10).await;
+    advance_time(outbox_provider.as_ref(), min_challenge + 10).await;
+
+    let handler = VerificationHandler::new(
+        route.outbox_provider.clone(),
+        route.outbox_address,
+        None,
+        &schedule_path,
+        "TEST",
+    );
+
+    handler.process_pending().await;
+
+    let schedule_after = schedule_file.load();
+    assert!(schedule_after.pending.is_empty(), "Task should be removed from schedule after verifySnapshot");
+
+    let latest_after: u64 = outbox.latestVerifiedEpoch().call().await.unwrap().try_into().unwrap();
+    println!("latestVerifiedEpoch after: {}", latest_after);
+    assert_eq!(latest_after, target_epoch, "latestVerifiedEpoch should be updated to target epoch");
+
+    println!("\nVERIFICATION HANDLER VERIFY_SNAPSHOT TEST PASSED!");
 }
