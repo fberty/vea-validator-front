@@ -53,7 +53,7 @@ forge build -q
 
 FROM="$(cast wallet address "$PK")"
 NONCE="$(cast nonce "$FROM" --rpc-url "$ARB_RPC")"
-INBOX_PREDICTED="$(cast compute-address "$FROM" --nonce "$NONCE" \
+INBOX_PREDICTED="$(cast compute-address "$FROM" --nonce $((NONCE + 2)) \
   | awk '/Computed Address:/ {print $3}')"
 
 create() {
@@ -97,10 +97,10 @@ OUTBOX="$(
       1000000000000000000 \
       3600 \
       600 \
-      24 \
+      999999999 \
       "$INBOX_PREDICTED" \
       "$BRIDGE" \
-      10 | addr_of
+      999999999 | addr_of
 )"
 
 # Deploy ArbSys mock - deploy normally first, then copy bytecode to precompile address

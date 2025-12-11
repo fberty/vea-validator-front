@@ -4,405 +4,14 @@ use alloy::primitives::{Address, FixedBytes, U256};
 use serial_test::serial;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::{timeout, Duration};
 use vea_validator::{
-    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH},
-    event_listener::{EventListener, ClaimEvent},
+    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth},
     claim_handler::ClaimHandler,
     config::ValidatorConfig,
     epoch_watcher::EpochWatcher,
 };
 use common::{restore_pristine, advance_time, Provider};
-
-#[tokio::test]
-#[serial]
-async fn test_validator_detects_and_challenges_wrong_claim() {
-    println!("\n==============================================");
-    println!("VALIDATOR INTEGRATION TEST: Wrong Claim Detection");
-    println!("==============================================\n");
-
-    let c = ValidatorConfig::from_env().expect("Failed to load config");
-    let routes = c.build_routes();
-    let route = &routes[0];
-
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
-
-    restore_pristine().await;
-
-    println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
-    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
-
-    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
-
-    for i in 0..3 {
-        let test_message = alloy::primitives::Bytes::from(vec![0xAA, 0xBB, 0xCC, i]);
-        inbox.sendMessage(
-            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
-            test_message
-        ).send().await.unwrap().get_receipt().await.unwrap();
-    }
-
-    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
-    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
-
-    if correct_root == FixedBytes::<32>::ZERO {
-        panic!("Got zero root, test cannot proceed");
-    }
-
-    println!("✓ Saved snapshot for epoch {} with correct root: {:?}", current_epoch, correct_root);
-
-    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
-    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
-
-    let target_epoch = current_epoch;
-
-    let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
-    let eth_timestamp = eth_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 10;
-    let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
-    if advance_amount > 0 {
-        println!("Syncing Ethereum time (advancing {} seconds)", advance_amount);
-        advance_time(outbox_provider.as_ref(), advance_amount).await;
-    }
-
-    println!("\n--- Starting Validator Components ---");
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
-    let event_listener = EventListener::new(route.outbox_provider.clone(), route.outbox_address);
-
-    let challenge_detected = Arc::new(AtomicBool::new(false));
-    let challenge_flag = challenge_detected.clone();
-
-    let claim_handler_clone = claim_handler.clone();
-    let watch_handle = tokio::spawn(async move {
-        event_listener.watch_claims(move |event: ClaimEvent| {
-            let handler = claim_handler_clone.clone();
-            let flag = challenge_flag.clone();
-            Box::pin(async move {
-                println!("📡 Validator detected claim for epoch {} by {}", event.epoch, event.claimer);
-
-                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
-                    if let Some(incorrect_claim) = invalid_claim {
-                        let epoch = incorrect_claim.epoch;
-                        println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
-
-                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
-                            eprintln!("❌ Challenge failed: {}", e);
-                        } else {
-                            println!("✅ Validator successfully challenged the claim!");
-                            flag.store(true, Ordering::SeqCst);
-                        }
-                    } else {
-                        println!("ℹ️  Validator decided NO ACTION needed");
-                    }
-                }
-                Ok(())
-            })
-        }).await
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    println!("\n--- ATTACK: Malicious actor submits wrong claim ---");
-    let wrong_root = FixedBytes::<32>::from([0x99; 32]);
-    println!("Wrong root: {:?}", wrong_root);
-    println!("Correct root: {:?}", correct_root);
-
-    let deposit = outbox.deposit().call().await.unwrap();
-    outbox.claim(U256::from(target_epoch), wrong_root)
-        .value(deposit)
-        .send().await.unwrap()
-        .get_receipt().await.unwrap();
-
-    println!("✓ Malicious claim submitted");
-
-    println!("\n--- Waiting for validator to detect and challenge... ---");
-
-    let result = timeout(Duration::from_secs(5), async {
-        while !challenge_detected.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }).await;
-
-    watch_handle.abort();
-
-    if result.is_ok() {
-        println!("\n✅✅✅ VALIDATOR TEST PASSED! ✅✅✅");
-        println!("The validator:");
-        println!("  1. Detected the malicious claim via event watching");
-        println!("  2. Verified it was incorrect");
-        println!("  3. Automatically challenged it");
-        println!("\nThis proves the validator's reactive logic works!");
-    } else {
-        panic!("❌ VALIDATOR FAILED: Did not challenge the wrong claim within 5 seconds");
-    }
-
-}
-
-#[tokio::test]
-#[serial]
-async fn test_validator_starts_bridging() {
-    println!("\n==============================================");
-    println!("VALIDATOR INTEGRATION TEST: Start Bridging");
-    println!("==============================================\n");
-
-    let c = ValidatorConfig::from_env().expect("Failed to load config");
-    let routes = c.build_routes();
-    let route = &routes[0];
-
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
-
-    restore_pristine().await;
-
-    println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
-    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
-
-    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
-
-    for i in 0..3 {
-        let test_message = alloy::primitives::Bytes::from(vec![0xDD, 0xEE, 0xFF, i]);
-        inbox.sendMessage(
-            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
-            test_message
-        ).send().await.unwrap().get_receipt().await.unwrap();
-    }
-
-    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
-    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
-
-    if correct_root == FixedBytes::<32>::ZERO {
-        panic!("Got zero root, test cannot proceed");
-    }
-
-    println!("✓ Saved snapshot for epoch {}", current_epoch);
-
-    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
-    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
-
-    let target_epoch = current_epoch;
-
-    let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
-    let eth_timestamp = eth_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 10;
-    let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
-    if advance_amount > 0 {
-        println!("Syncing Ethereum time (advancing {} seconds)", advance_amount);
-        advance_time(outbox_provider.as_ref(), advance_amount).await;
-    }
-
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-    let event_listener = EventListener::new(route.outbox_provider.clone(), route.outbox_address);
-
-    let bridge_resolution_triggered = Arc::new(AtomicBool::new(false));
-    let bridge_flag = bridge_resolution_triggered.clone();
-
-    let claim_handler_clone = claim_handler.clone();
-    let watch_handle = tokio::spawn(async move {
-        event_listener.watch_claims(move |event: ClaimEvent| {
-            let handler = claim_handler_clone.clone();
-            let flag = bridge_flag.clone();
-
-            Box::pin(async move {
-                println!("📡 Detected claim for epoch {}", event.epoch);
-
-                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
-                    if let Some(incorrect_claim) = invalid_claim {
-                        let epoch = incorrect_claim.epoch;
-                        println!("⚔️  Challenging and triggering bridge resolution...");
-
-                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
-                            eprintln!("Challenge failed: {}", e);
-                        } else {
-                            if let Err(e) = handler.start_bridging(epoch, &event).await {
-                                eprintln!("Start bridging failed: {}", e);
-                            } else {
-                                flag.store(true, Ordering::SeqCst);
-                            }
-                        }
-                    }
-                }
-                Ok(())
-            })
-        }).await
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    println!("\n--- ATTACK: Submitting wrong claim ---");
-    let wrong_root = FixedBytes::<32>::from([0x88; 32]);
-    let deposit = outbox.deposit().call().await.unwrap();
-    outbox.claim(U256::from(target_epoch), wrong_root)
-        .value(deposit)
-        .send().await.unwrap()
-        .get_receipt().await.unwrap();
-
-    println!("✓ Wrong claim submitted");
-
-    println!("\n--- Waiting for validator to trigger bridge resolution... ---");
-
-    let result = timeout(Duration::from_secs(5), async {
-        while !bridge_resolution_triggered.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }).await;
-
-    watch_handle.abort();
-
-    if result.is_err() {
-        panic!("❌ VALIDATOR FAILED: Did not trigger bridge resolution within 5 seconds");
-    }
-
-    println!("\n✅✅✅ START BRIDGING TEST PASSED! ✅✅✅");
-    println!("The validator:");
-    println!("  1. Detected the malicious claim");
-    println!("  2. Challenged it");
-    println!("  3. Called ClaimHandler::start_bridging()");
-    println!("\nNote: Full bridge relay (7-day delay + executeTransaction) not tested here");
-
-}
-
-#[tokio::test]
-#[serial]
-async fn test_validator_detects_and_challenges_wrong_claim_arb_to_gnosis() {
-    println!("\n====================================================");
-    println!("VALIDATOR INTEGRATION TEST: ARB → GNOSIS Route");
-    println!("====================================================\n");
-
-    let c = ValidatorConfig::from_env().expect("Failed to load config");
-    let routes = c.build_routes();
-    let route = &routes[1];
-
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
-
-    restore_pristine().await;
-
-    println!("--- SETUP: Creating epoch with messages and snapshot ---");
-    let inbox = IVeaInboxArbToGnosis::new(route.inbox_address, inbox_provider.clone());
-    let outbox = IVeaOutboxArbToGnosis::new(route.outbox_address, outbox_provider.clone());
-
-    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
-
-    for i in 0..3 {
-        let test_message = alloy::primitives::Bytes::from(vec![0xAA, 0xBB, 0xCC, i]);
-        inbox.sendMessage(
-            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
-            test_message
-        ).send().await.unwrap().get_receipt().await.unwrap();
-    }
-
-    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
-    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
-
-    if correct_root == FixedBytes::<32>::ZERO {
-        panic!("Got zero root, test cannot proceed");
-    }
-
-    println!("✓ Saved snapshot for epoch {} with correct root: {:?}", current_epoch, correct_root);
-
-    advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
-    advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
-
-    let target_epoch = current_epoch;
-
-    let gnosis_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
-    let gnosis_timestamp = gnosis_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 10;
-    let advance_amount = target_timestamp.saturating_sub(gnosis_timestamp);
-    if advance_amount > 0 {
-        println!("Syncing Gnosis time (advancing {} seconds)", advance_amount);
-        advance_time(outbox_provider.as_ref(), advance_amount).await;
-    }
-
-    println!("\n--- Setting up WETH for validator ---");
-    let weth = IWETH::new(route.weth_address.unwrap(), outbox_provider.clone());
-    let wallet_address = c.wallet.default_signer().address();
-
-    let deposit = outbox.deposit().call().await.unwrap();
-    weth.mintMock(wallet_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
-    weth.approve(route.outbox_address, deposit * U256::from(10)).send().await.unwrap().get_receipt().await.unwrap();
-    println!("✓ WETH minted and approved for validator");
-
-    println!("\n--- Starting Validator Components ---");
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
-    let event_listener = EventListener::new(route.outbox_provider.clone(), route.outbox_address);
-
-    let challenge_detected = Arc::new(AtomicBool::new(false));
-    let challenge_flag = challenge_detected.clone();
-
-    let claim_handler_clone = claim_handler.clone();
-    let watch_handle = tokio::spawn(async move {
-        event_listener.watch_claims(move |event: ClaimEvent| {
-            let handler = claim_handler_clone.clone();
-            let flag = challenge_flag.clone();
-            Box::pin(async move {
-                println!("📡 Validator detected claim for epoch {} by {}", event.epoch, event.claimer);
-
-                if let Ok(invalid_claim) = handler.handle_claim_event(event.clone()).await {
-                    if let Some(incorrect_claim) = invalid_claim {
-                        let epoch = incorrect_claim.epoch;
-                        println!("⚔️  Validator decided to CHALLENGE epoch {}", epoch);
-
-                        if let Err(e) = handler.challenge_claim(epoch, vea_validator::claim_handler::make_claim(&incorrect_claim)).await {
-                            eprintln!("❌ Challenge failed: {}", e);
-                        } else {
-                            println!("✅ Validator successfully challenged the claim!");
-                            flag.store(true, Ordering::SeqCst);
-                        }
-                    } else {
-                        println!("ℹ️  Validator decided NO ACTION needed");
-                    }
-                }
-                Ok(())
-            })
-        }).await
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    println!("\n--- ATTACK: Malicious actor submits wrong claim on Gnosis ---");
-
-    let wrong_root = FixedBytes::<32>::from([0x99; 32]);
-    println!("Wrong root: {:?}", wrong_root);
-    println!("Correct root: {:?}", correct_root);
-
-    outbox.claim(U256::from(target_epoch), wrong_root)
-        .send().await.unwrap()
-        .get_receipt().await.unwrap();
-
-    println!("✓ Malicious claim submitted on Gnosis");
-
-    println!("\n--- Waiting for validator to detect and challenge... ---");
-
-    let result = timeout(Duration::from_secs(5), async {
-        while !challenge_detected.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }).await;
-
-    watch_handle.abort();
-
-    if result.is_ok() {
-        println!("\n✅✅✅ ARB → GNOSIS VALIDATOR TEST PASSED! ✅✅✅");
-        println!("The validator:");
-        println!("  1. Detected the malicious claim on Gnosis via event watching");
-        println!("  2. Verified it was incorrect against Arbitrum snapshot");
-        println!("  3. Automatically challenged it on Gnosis");
-        println!("\nThis proves the validator works for the ARB → GNOSIS route!");
-    } else {
-        panic!("❌ VALIDATOR FAILED: Did not challenge the wrong claim on Gnosis within 5 seconds");
-    }
-
-}
 
 #[tokio::test]
 #[serial]
@@ -467,12 +76,11 @@ async fn test_epoch_watcher_saves_snapshot_before_epoch_ends() {
     watcher_handle.abort();
 
     if result.is_err() {
-        panic!("❌ VALIDATOR FAILED: Did not call saveSnapshot when BEFORE_EPOCH_BUFFER triggered");
+        panic!("VALIDATOR FAILED: Did not call saveSnapshot when BEFORE_EPOCH_BUFFER triggered");
     }
 
-    println!("\n✅ EPOCH WATCHER TEST PASSED!");
+    println!("\nEPOCH WATCHER TEST PASSED!");
     println!("The validator correctly called saveSnapshot when time reached BEFORE_EPOCH_BUFFER");
-
 }
 
 #[tokio::test]
@@ -546,12 +154,11 @@ async fn test_epoch_watcher_after_epoch_verifies_claim() {
     watcher_handle.abort();
 
     if result.is_err() {
-        panic!("❌ VALIDATOR FAILED: Did not submit claim when AFTER_EPOCH_BUFFER triggered");
+        panic!("VALIDATOR FAILED: Did not submit claim when AFTER_EPOCH_BUFFER triggered");
     }
 
-    println!("\n✅ EPOCH WATCHER CLAIM TEST PASSED!");
+    println!("\nEPOCH WATCHER CLAIM TEST PASSED!");
     println!("The validator correctly submitted claim when time reached AFTER_EPOCH_BUFFER");
-
 }
 
 #[tokio::test]
@@ -609,9 +216,8 @@ async fn test_epoch_watcher_no_duplicate_save_snapshot() {
     let snapshot_after = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
     assert_eq!(snapshot_before, snapshot_after, "Snapshot should not change - validator should skip if already exists");
 
-    println!("\n✅ NO DUPLICATE SNAPSHOT TEST PASSED!");
+    println!("\nNO DUPLICATE SNAPSHOT TEST PASSED!");
     println!("The validator correctly skipped saveSnapshot when snapshot already existed");
-
 }
 
 #[tokio::test]
@@ -666,7 +272,7 @@ async fn test_race_condition_claim_already_made() {
         .send().await.unwrap()
         .get_receipt().await.unwrap();
 
-    println!("✓ Claim already exists on-chain");
+    println!("Claim already exists on-chain");
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
@@ -675,134 +281,14 @@ async fn test_race_condition_claim_already_made() {
 
     match result {
         Err(e) => {
-            println!("✓ Validator got error (expected): {}", e);
-            println!("✓ Validator did NOT panic - graceful handling");
+            println!("Validator got error (expected): {}", e);
+            println!("Validator did NOT panic - graceful handling");
         }
         Ok(_) => {
-            println!("✓ Validator succeeded (contract might have allowed it, or detected existing claim)");
+            println!("Validator succeeded (detected existing claim)");
         }
     }
 
-    println!("\n✅ RACE CONDITION TEST PASSED!");
+    println!("\nRACE CONDITION TEST PASSED!");
     println!("Validator handles 'claim already made' without crashing");
-
-}
-
-#[tokio::test]
-#[serial]
-async fn test_race_condition_challenge_already_made() {
-    println!("\n==============================================");
-    println!("RACE CONDITION TEST: Challenge Already Made");
-    println!("==============================================\n");
-
-    let c = ValidatorConfig::from_env().expect("Failed to load config");
-    let routes = c.build_routes();
-    let route = &routes[0];
-
-    let inbox_provider = Arc::new(route.inbox_provider.clone());
-    let outbox_provider = Arc::new(route.outbox_provider.clone());
-
-    restore_pristine().await;
-
-    let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
-    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
-    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
-
-    for i in 0..3 {
-        let test_message = alloy::primitives::Bytes::from(vec![0x77, 0x88, 0x99, i]);
-        inbox.sendMessage(
-            Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
-            test_message
-        ).send().await.unwrap().get_receipt().await.unwrap();
-    }
-
-    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
-    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
-
-    println!("Epoch {} correct root: {:?}", current_epoch, correct_root);
-
-    advance_time(inbox_provider.as_ref(), epoch_period + 70).await;
-    advance_time(outbox_provider.as_ref(), epoch_period + 70).await;
-
-    let target_epoch = current_epoch;
-    let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
-    let eth_timestamp = eth_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 70;
-    let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
-    if advance_amount > 0 {
-        advance_time(outbox_provider.as_ref(), advance_amount).await;
-    }
-
-    let event_listener = EventListener::new(route.outbox_provider.clone(), route.outbox_address);
-
-    let claim_event_captured = Arc::new(tokio::sync::RwLock::new(None::<ClaimEvent>));
-    let claim_event_flag = claim_event_captured.clone();
-
-    let listener_handle = tokio::spawn(async move {
-        event_listener.watch_claims(move |event: ClaimEvent| {
-            let flag = claim_event_flag.clone();
-            Box::pin(async move {
-                let mut captured = flag.write().await;
-                *captured = Some(event);
-                Ok(())
-            })
-        }).await
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    println!("Malicious actor submits wrong claim...");
-    let wrong_root = FixedBytes::<32>::from([0xEE; 32]);
-    let deposit = outbox.deposit().call().await.unwrap();
-    outbox.claim(U256::from(target_epoch), wrong_root)
-        .value(deposit)
-        .send().await.unwrap()
-        .get_receipt().await.unwrap();
-
-    println!("✓ Wrong claim submitted, waiting for event...");
-
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let claim_event = {
-        let captured = claim_event_captured.read().await;
-        captured.clone().expect("Should have captured claim event")
-    };
-
-    listener_handle.abort();
-
-    println!("✓ Captured claim event: epoch {}, root {:?}", claim_event.epoch, claim_event.state_root);
-
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
-    println!("First validator challenges...");
-    let claim_struct = vea_validator::claim_handler::make_claim(&claim_event);
-    let first_result = claim_handler.challenge_claim(target_epoch, claim_struct.clone()).await;
-
-    match first_result {
-        Ok(_) => println!("✓ First challenge succeeded"),
-        Err(e) => panic!("First challenge should succeed but failed: {}", e),
-    }
-
-    println!("Second validator attempts to challenge (race condition)...");
-    let second_result = claim_handler.challenge_claim(target_epoch, claim_struct).await;
-
-    match second_result {
-        Err(e) => {
-            let err_msg = e.to_string();
-            println!("✓ Second challenge failed: {}", e);
-            if err_msg.contains("already") || err_msg.contains("challenged") {
-                println!("✓ Error indicates claim already challenged");
-            }
-            println!("✓ Validator did NOT panic - handled gracefully");
-        }
-        Ok(_) => {
-            println!("⚠️  Second challenge succeeded (contract may allow it)");
-            println!("✓ Validator did NOT panic");
-        }
-    }
-
-    println!("\n✅ RACE CONDITION TEST PASSED!");
-    println!("Validator handles duplicate challenges without crashing");
-
 }

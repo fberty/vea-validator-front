@@ -56,6 +56,9 @@ sol! {
         function epochPeriod() external view returns (uint256);
         function claimHashes(uint256 epoch) external view returns (bytes32);
         function hashClaim(Claim memory _claim) external pure returns (bytes32);
+        function sequencerDelayLimit() external view returns (uint256);
+        function minChallengePeriod() external view returns (uint256);
+        function latestVerifiedEpoch() external view returns (uint256);
     }
 
     #[derive(Debug)]
@@ -95,6 +98,7 @@ sol! {
         function claimHashes(uint256 epoch) external view returns (bytes32);
         function hashClaim(Claim memory _claim) external pure returns (bytes32);
         function sequencerDelayLimit() external view returns (uint256);
+        function minChallengePeriod() external view returns (uint256);
     }
 
     #[derive(Debug)]

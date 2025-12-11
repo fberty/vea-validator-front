@@ -1,5 +1,4 @@
 pub mod contracts;
-pub mod event_listener;
 pub mod epoch_watcher;
 pub mod claim_handler;
 pub mod config;
@@ -9,3 +8,5 @@ pub mod l2_to_l1_finder;
 pub mod arb_relay_handler;
 pub mod amb_finder;
 pub mod amb_relay_handler;
+pub mod claim_finder;
+pub mod verification_handler;

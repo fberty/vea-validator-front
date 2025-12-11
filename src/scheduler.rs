@@ -76,6 +76,24 @@ pub struct AmbTask {
     pub execute_after: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VerificationPhase {
+    StartVerification,
+    VerifySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationTask {
+    pub epoch: u64,
+    pub execute_after: u64,
+    pub phase: VerificationPhase,
+    pub state_root: FixedBytes<32>,
+    pub claimer: Address,
+    pub timestamp_claimed: u32,
+    pub timestamp_verification: u32,
+    pub blocknumber_verification: u32,
+}
+
 mod u256_hex {
     use alloy::primitives::U256;
     use serde::{self, Deserialize, Deserializer, Serializer};

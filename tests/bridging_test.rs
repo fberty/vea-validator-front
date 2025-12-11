@@ -7,8 +7,7 @@ use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::time::{timeout, Duration};
 use vea_validator::{
-    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IOutbox},
-    claim_handler::ClaimHandler,
+    contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IOutbox, Claim, Party},
     config::ValidatorConfig,
     l2_to_l1_finder::L2ToL1Finder,
     arb_relay_handler::ArbRelayHandler,
@@ -83,20 +82,28 @@ async fn test_l2_to_l1_finder_discovers_snapshot_sent_event() {
         .send().await.unwrap()
         .get_receipt().await.unwrap();
 
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
-    let claim_event = vea_validator::event_listener::ClaimEvent {
-        epoch: target_epoch,
-        claimer: c.wallet.default_signer().address(),
-        state_root: wrong_root,
-        timestamp_claimed: eth_timestamp as u32,
+    let wallet_address = c.wallet.default_signer().address();
+    let claim = Claim {
+        stateRoot: wrong_root,
+        claimer: wallet_address,
+        timestampClaimed: eth_timestamp as u32,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: Party::None,
+        challenger: Address::ZERO,
     };
 
-    claim_handler.challenge_claim(target_epoch, vea_validator::claim_handler::make_claim(&claim_event)).await.unwrap();
+    let challenge_deposit = outbox.deposit().call().await.unwrap();
+    outbox.challenge(U256::from(target_epoch), claim.clone(), wallet_address)
+        .value(challenge_deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
     println!("Challenge submitted");
 
-    claim_handler.start_bridging(target_epoch, &claim_event).await.unwrap();
-    println!("start_bridging() called - sendSnapshot emitted SnapshotSent event");
+    inbox.sendSnapshot(U256::from(target_epoch), claim)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+    println!("sendSnapshot() called - emitted SnapshotSent event");
 
     let tmp_dir = tempdir().unwrap();
     let schedule_path = tmp_dir.path().join("arb_to_eth.json");
@@ -243,9 +250,84 @@ async fn test_full_arb_to_eth_relay_flow() {
 
     let inbox = IVeaInboxArbToEth::new(route.inbox_address, inbox_provider.clone());
     let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
-    let _arb_outbox_contract = IOutbox::new(arb_outbox, outbox_provider.clone());
 
     let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+    let seq_delay: u64 = outbox.sequencerDelayLimit().call().await.unwrap().try_into().unwrap();
+    let min_challenge: u64 = outbox.minChallengePeriod().call().await.unwrap().try_into().unwrap();
+
+    let latest_verified_start: u64 = outbox.latestVerifiedEpoch().call().await.unwrap().try_into().unwrap();
+    println!("Contract params: epochPeriod={}, seqDelay={}, minChallenge={}", epoch_period, seq_delay, min_challenge);
+    println!("Initial latestVerifiedEpoch={}", latest_verified_start);
+
+    let wallet_address = c.wallet.default_signer().address();
+    let deposit = outbox.deposit().call().await.unwrap();
+
+    println!("Phase 0: Running initial honest verification to get bridge into healthy state...");
+    {
+        for i in 0..2 {
+            let test_message = alloy::primitives::Bytes::from(vec![0x00, 0x00, i]);
+            inbox.sendMessage(
+                Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+                test_message
+            ).send().await.unwrap().get_receipt().await.unwrap();
+        }
+
+        let init_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+        inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+        let init_root = inbox.snapshots(U256::from(init_epoch)).call().await.unwrap();
+
+        advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+        advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+
+        let init_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+        let init_claim_ts = init_block.header.timestamp;
+
+        outbox.claim(U256::from(init_epoch), init_root)
+            .value(deposit)
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        advance_time(inbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+        advance_time(outbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+
+        let init_claim = Claim {
+            stateRoot: init_root,
+            claimer: wallet_address,
+            timestampClaimed: init_claim_ts as u32,
+            timestampVerification: 0,
+            blocknumberVerification: 0,
+            honest: Party::None,
+            challenger: Address::ZERO,
+        };
+
+        outbox.startVerification(U256::from(init_epoch), init_claim.clone())
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        let verif_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+        let verif_ts = verif_block.header.timestamp as u32;
+        let verif_bn = verif_block.header.number as u32;
+
+        advance_time(inbox_provider.as_ref(), min_challenge + 10).await;
+        advance_time(outbox_provider.as_ref(), min_challenge + 10).await;
+
+        let verified_claim = Claim {
+            stateRoot: init_root,
+            claimer: wallet_address,
+            timestampClaimed: init_claim_ts as u32,
+            timestampVerification: verif_ts,
+            blocknumberVerification: verif_bn,
+            honest: Party::None,
+            challenger: Address::ZERO,
+        };
+
+        outbox.verifySnapshot(U256::from(init_epoch), verified_claim)
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        let latest_verified: u64 = outbox.latestVerifiedEpoch().call().await.unwrap().try_into().unwrap();
+        println!("  Initial verification complete: epoch {}, latestVerifiedEpoch={}", init_epoch, latest_verified);
+    }
 
     for i in 0..3 {
         let test_message = alloy::primitives::Bytes::from(vec![0xDE, 0xAD, 0xBE, 0xEF, i]);
@@ -255,20 +337,18 @@ async fn test_full_arb_to_eth_relay_flow() {
         ).send().await.unwrap().get_receipt().await.unwrap();
     }
 
-    let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    let challenged_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
     inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
-    let correct_root = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
+    let _correct_root = inbox.snapshots(U256::from(challenged_epoch)).call().await.unwrap();
 
-    println!("Phase 1: Setup complete - epoch {} with root {:?}", current_epoch, correct_root);
+    println!("Phase 1: Setup complete - challenged epoch {}", challenged_epoch);
 
     advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
     advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
 
-    let target_epoch = current_epoch;
-
     let eth_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let eth_timestamp = eth_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 10;
+    let target_timestamp = (challenged_epoch + 1) * epoch_period + 10;
     let advance_amount = target_timestamp.saturating_sub(eth_timestamp);
     if advance_amount > 0 {
         advance_time(outbox_provider.as_ref(), advance_amount).await;
@@ -276,26 +356,37 @@ async fn test_full_arb_to_eth_relay_flow() {
 
     let wrong_root = FixedBytes::<32>::from([0x77; 32]);
     let deposit = outbox.deposit().call().await.unwrap();
-    outbox.claim(U256::from(target_epoch), wrong_root)
+    let claim_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+    let claim_timestamp = claim_block.header.timestamp;
+
+    outbox.claim(U256::from(challenged_epoch), wrong_root)
         .value(deposit)
         .send().await.unwrap()
         .get_receipt().await.unwrap();
 
-    println!("Phase 2: Wrong claim submitted");
+    println!("Phase 2: Wrong claim submitted for epoch {}", challenged_epoch);
 
-    let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
-
-    let claim_event = vea_validator::event_listener::ClaimEvent {
-        epoch: target_epoch,
-        claimer: c.wallet.default_signer().address(),
-        state_root: wrong_root,
-        timestamp_claimed: eth_timestamp as u32,
+    let challenged_claim = Claim {
+        stateRoot: wrong_root,
+        claimer: wallet_address,
+        timestampClaimed: claim_timestamp as u32,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: Party::None,
+        challenger: Address::ZERO,
     };
 
-    claim_handler.challenge_claim(target_epoch, vea_validator::claim_handler::make_claim(&claim_event)).await.unwrap();
-    claim_handler.start_bridging(target_epoch, &claim_event).await.unwrap();
+    let challenge_deposit = outbox.deposit().call().await.unwrap();
+    outbox.challenge(U256::from(challenged_epoch), challenged_claim.clone(), wallet_address)
+        .value(challenge_deposit)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
 
-    println!("Phase 3: Challenge + start_bridging complete");
+    inbox.sendSnapshot(U256::from(challenged_epoch), challenged_claim)
+        .send().await.unwrap()
+        .get_receipt().await.unwrap();
+
+    println!("Phase 3: Challenge + sendSnapshot complete");
 
     let tmp_dir = tempdir().unwrap();
     let schedule_path = tmp_dir.path().join("arb_to_eth.json");
@@ -322,17 +413,93 @@ async fn test_full_arb_to_eth_relay_flow() {
 
     finder_handle.abort();
 
-    println!("Phase 4: L2ToL1Finder discovered task - epoch {}, ticketId {:#x}", task.epoch, task.position);
+    println!("Phase 4: L2ToL1Finder discovered task - epoch {}, position {:#x}", task.epoch, task.position);
 
     let arb_outbox_contract = IOutbox::new(arb_outbox, outbox_provider.clone());
     let is_spent_before = arb_outbox_contract.isSpent(task.position).call().await.unwrap();
     assert!(!is_spent_before, "Position should NOT be spent before relay");
     println!("Phase 5: Verified position {:#x} is not spent yet", task.position);
 
-    println!("Phase 6: Advancing time by 7 days for relay delay...");
-    let relay_delay = 7 * 24 * 3600 + 100;
-    advance_time(inbox_provider.as_ref(), relay_delay).await;
-    advance_time(outbox_provider.as_ref(), relay_delay).await;
+    println!("Phase 6: Running honest epoch loop to keep bridge alive during 7-day wait...");
+
+    let relay_delay: u64 = 7 * 24 * 3600;
+    let mut time_accumulated: u64 = 0;
+    let mut cycle = 0;
+
+    while time_accumulated < relay_delay {
+        cycle += 1;
+
+        for i in 0..2 {
+            let test_message = alloy::primitives::Bytes::from(vec![0xAA, cycle as u8, i]);
+            inbox.sendMessage(
+                Address::from_str("0x0000000000000000000000000000000000000001").unwrap(),
+                test_message
+            ).send().await.unwrap().get_receipt().await.unwrap();
+        }
+
+        let honest_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+        inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+        let honest_root = inbox.snapshots(U256::from(honest_epoch)).call().await.unwrap();
+
+        advance_time(inbox_provider.as_ref(), epoch_period + 10).await;
+        advance_time(outbox_provider.as_ref(), epoch_period + 10).await;
+        time_accumulated += epoch_period + 10;
+
+        let block_after_epoch = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+        let honest_claim_ts = block_after_epoch.header.timestamp;
+
+        outbox.claim(U256::from(honest_epoch), honest_root)
+            .value(deposit)
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        advance_time(inbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+        advance_time(outbox_provider.as_ref(), seq_delay + epoch_period + 10).await;
+        time_accumulated += seq_delay + epoch_period + 10;
+
+        let honest_claim = Claim {
+            stateRoot: honest_root,
+            claimer: wallet_address,
+            timestampClaimed: honest_claim_ts as u32,
+            timestampVerification: 0,
+            blocknumberVerification: 0,
+            honest: Party::None,
+            challenger: Address::ZERO,
+        };
+
+        outbox.startVerification(U256::from(honest_epoch), honest_claim.clone())
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        let verif_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
+        let verif_ts = verif_block.header.timestamp as u32;
+        let verif_bn = verif_block.header.number as u32;
+
+        advance_time(inbox_provider.as_ref(), min_challenge + 10).await;
+        advance_time(outbox_provider.as_ref(), min_challenge + 10).await;
+        time_accumulated += min_challenge + 10;
+
+        let verified_claim = Claim {
+            stateRoot: honest_root,
+            claimer: wallet_address,
+            timestampClaimed: honest_claim_ts as u32,
+            timestampVerification: verif_ts,
+            blocknumberVerification: verif_bn,
+            honest: Party::None,
+            challenger: Address::ZERO,
+        };
+
+        outbox.verifySnapshot(U256::from(honest_epoch), verified_claim)
+            .send().await.unwrap()
+            .get_receipt().await.unwrap();
+
+        let latest_verified: u64 = outbox.latestVerifiedEpoch().call().await.unwrap().try_into().unwrap();
+        let current_epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+        println!("  Cycle {}: verified epoch {}, latestVerified={}, currentEpoch={}, time={}s/{}s",
+            cycle, honest_epoch, latest_verified, current_epoch, time_accumulated, relay_delay);
+    }
+
+    println!("Phase 7: Bridge kept alive, now executing relay...");
 
     let handler = ArbRelayHandler::new(
         route.inbox_provider.clone(),
@@ -341,7 +508,6 @@ async fn test_full_arb_to_eth_relay_flow() {
         &schedule_path,
     );
 
-    println!("Phase 7: Calling process_pending() to execute relay...");
     handler.process_pending().await;
 
     let is_spent_after = arb_outbox_contract.isSpent(task.position).call().await.unwrap();
