@@ -17,38 +17,28 @@ const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 
 pub struct L2ToL1Finder {
     arb_provider: DynProvider<Ethereum>,
-    targets: Vec<FinderTarget>,
-}
-
-struct FinderTarget {
     inbox_address: Address,
     schedule_path: PathBuf,
+    route_name: &'static str,
 }
 
 impl L2ToL1Finder {
-    pub fn new(arb_provider: DynProvider<Ethereum>) -> Self {
+    pub fn new(
+        arb_provider: DynProvider<Ethereum>,
+        inbox_address: Address,
+        schedule_path: impl Into<PathBuf>,
+        route_name: &'static str,
+    ) -> Self {
         Self {
             arb_provider,
-            targets: Vec::new(),
-        }
-    }
-
-    pub fn add_inbox(mut self, inbox_address: Address, schedule_path: impl Into<PathBuf>) -> Self {
-        self.targets.push(FinderTarget {
             inbox_address,
             schedule_path: schedule_path.into(),
-        });
-        self
+            route_name,
+        }
     }
 
     pub async fn run(&self) {
-        for target in &self.targets {
-            self.run_for_target(target).await;
-        }
-    }
-
-    async fn run_for_target(&self, target: &FinderTarget) {
-        let schedule_file: ScheduleFile<ArbToL1Task> = ScheduleFile::new(&target.schedule_path);
+        let schedule_file: ScheduleFile<ArbToL1Task> = ScheduleFile::new(&self.schedule_path);
         let snapshot_sent_sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
 
         loop {
@@ -56,7 +46,7 @@ impl L2ToL1Finder {
             let raw_block = match self.arb_provider.get_block_number().await {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("[L2ToL1Finder] Failed to get block number: {}, retrying...", e);
+                    eprintln!("[{}][L2ToL1Finder] Failed to get block number: {}, retrying...", self.route_name, e);
                     sleep(RETRY_DELAY).await;
                     continue;
                 }
@@ -71,7 +61,7 @@ impl L2ToL1Finder {
             let from_block = schedule.last_checked_block.unwrap_or(0);
 
             if from_block >= current_block {
-                println!("[L2ToL1Finder] Caught up to block {}, waiting...", current_block);
+                println!("[{}][L2ToL1Finder] Caught up to block {}, waiting...", self.route_name, current_block);
                 sleep(POLL_INTERVAL).await;
                 continue;
             }
@@ -79,7 +69,7 @@ impl L2ToL1Finder {
             let to_block = min(from_block + CHUNK_SIZE, current_block);
 
             let filter = Filter::new()
-                .address(target.inbox_address)
+                .address(self.inbox_address)
                 .event_signature(snapshot_sent_sig)
                 .from_block(from_block)
                 .to_block(to_block);
@@ -105,28 +95,28 @@ impl L2ToL1Finder {
                         let task = match self.fetch_l2_to_l1_from_tx(tx_hash, epoch).await {
                             Some(t) => t,
                             None => {
-                                eprintln!("[L2ToL1Finder] No L2ToL1Tx found in tx {:?}", tx_hash);
+                                eprintln!("[{}][L2ToL1Finder] No L2ToL1Tx found in tx {:?}", self.route_name, tx_hash);
                                 continue;
                             }
                         };
 
                         println!(
-                            "[L2ToL1Finder] Found SnapshotSent: epoch={}, position={:#x}",
-                            task.epoch, task.position
+                            "[{}][L2ToL1Finder] Found SnapshotSent: epoch={}, position={:#x}",
+                            self.route_name, task.epoch, task.position
                         );
                         schedule.pending.push(task);
                     }
                     schedule.last_checked_block = Some(to_block);
                     schedule_file.save(&schedule);
                     println!(
-                        "[L2ToL1Finder] Scanned blocks {}-{}, {} pending tasks",
-                        from_block, to_block, schedule.pending.len()
+                        "[{}][L2ToL1Finder] Scanned blocks {}-{}, {} pending tasks",
+                        self.route_name, from_block, to_block, schedule.pending.len()
                     );
                 }
                 Err(e) => {
                     eprintln!(
-                        "[L2ToL1Finder] Failed to query logs {}-{}: {}, retrying...",
-                        from_block, to_block, e
+                        "[{}][L2ToL1Finder] Failed to query logs {}-{}: {}, retrying...",
+                        self.route_name, from_block, to_block, e
                     );
                     sleep(RETRY_DELAY).await;
                 }

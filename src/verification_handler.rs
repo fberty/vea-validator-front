@@ -4,31 +4,40 @@ use alloy::network::Ethereum;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
-use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, Claim, Party};
+use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IVeaInboxArbToEth, IVeaInboxArbToGnosis, Claim, Party};
 use crate::scheduler::{ScheduleFile, VerificationTask, VerificationPhase};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 pub struct VerificationHandler {
+    inbox_provider: DynProvider<Ethereum>,
+    inbox_address: Address,
     outbox_provider: DynProvider<Ethereum>,
     outbox_address: Address,
     weth_address: Option<Address>,
+    wallet_address: Address,
     schedule_path: PathBuf,
     route_name: &'static str,
 }
 
 impl VerificationHandler {
     pub fn new(
+        inbox_provider: DynProvider<Ethereum>,
+        inbox_address: Address,
         outbox_provider: DynProvider<Ethereum>,
         outbox_address: Address,
         weth_address: Option<Address>,
+        wallet_address: Address,
         schedule_path: impl Into<PathBuf>,
         route_name: &'static str,
     ) -> Self {
         Self {
+            inbox_provider,
+            inbox_address,
             outbox_provider,
             outbox_address,
             weth_address,
+            wallet_address,
             schedule_path: schedule_path.into(),
             route_name,
         }
@@ -71,18 +80,28 @@ impl VerificationHandler {
                 timestampVerification: task.timestamp_verification,
                 blocknumberVerification: task.blocknumber_verification,
                 honest: Party::None,
-                challenger: Address::ZERO,
+                challenger: task.challenger,
             };
 
             match task.phase {
+                VerificationPhase::Challenge => {
+                    if self.call_challenge(task.epoch, claim).await {
+                        schedule.pending.retain(|t| !(t.epoch == task.epoch && matches!(t.phase, VerificationPhase::Challenge)));
+                    }
+                }
+                VerificationPhase::SendSnapshot => {
+                    if self.call_send_snapshot(task.epoch, claim).await {
+                        schedule.pending.retain(|t| !(t.epoch == task.epoch && matches!(t.phase, VerificationPhase::SendSnapshot)));
+                    }
+                }
                 VerificationPhase::StartVerification => {
                     if self.call_start_verification(task.epoch, claim).await {
-                        schedule.pending.retain(|t| t.epoch != task.epoch);
+                        schedule.pending.retain(|t| !(t.epoch == task.epoch && matches!(t.phase, VerificationPhase::StartVerification)));
                     }
                 }
                 VerificationPhase::VerifySnapshot => {
                     if self.call_verify_snapshot(task.epoch, claim).await {
-                        schedule.pending.retain(|t| t.epoch != task.epoch);
+                        schedule.pending.retain(|t| !(t.epoch == task.epoch && matches!(t.phase, VerificationPhase::VerifySnapshot)));
                     }
                 }
             }
@@ -210,6 +229,113 @@ impl VerificationHandler {
                     }
                     eprintln!("[{}][VerificationHandler] verifySnapshot failed for epoch {}: {}", self.route_name, epoch, e);
                     false
+                }
+            }
+        }
+    }
+
+    async fn call_challenge(&self, epoch: u64, claim: Claim) -> bool {
+        println!("[{}][VerificationHandler] Calling challenge for epoch {}", self.route_name, epoch);
+
+        if self.weth_address.is_some() {
+            let outbox = IVeaOutboxArbToGnosis::new(self.outbox_address, self.outbox_provider.clone());
+            match outbox.challenge(U256::from(epoch), claim).send().await {
+                Ok(pending) => match pending.get_receipt().await {
+                    Ok(receipt) => {
+                        if receipt.status() {
+                            println!("[{}][VerificationHandler] challenge succeeded for epoch {}", self.route_name, epoch);
+                            true
+                        } else {
+                            panic!("[{}][VerificationHandler] FATAL: challenge reverted for epoch {}", self.route_name, epoch);
+                        }
+                    }
+                    Err(e) => {
+                        panic!("[{}][VerificationHandler] FATAL: challenge receipt failed for epoch {}: {}", self.route_name, epoch, e);
+                    }
+                },
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Invalid claim") || err_msg.contains("already") {
+                        println!("[{}][VerificationHandler] Claim already challenged - bridge is safe", self.route_name);
+                        return true;
+                    }
+                    panic!("[{}][VerificationHandler] FATAL: challenge failed for epoch {}: {}", self.route_name, epoch, e);
+                }
+            }
+        } else {
+            let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.outbox_provider.clone());
+            let deposit = match outbox.deposit().call().await {
+                Ok(d) => d,
+                Err(e) => panic!("[{}][VerificationHandler] FATAL: Failed to get deposit for challenge: {}", self.route_name, e),
+            };
+            match outbox.challenge(U256::from(epoch), claim, self.wallet_address).value(deposit).send().await {
+                Ok(pending) => match pending.get_receipt().await {
+                    Ok(receipt) => {
+                        if receipt.status() {
+                            println!("[{}][VerificationHandler] challenge succeeded for epoch {}", self.route_name, epoch);
+                            true
+                        } else {
+                            panic!("[{}][VerificationHandler] FATAL: challenge reverted for epoch {}", self.route_name, epoch);
+                        }
+                    }
+                    Err(e) => {
+                        panic!("[{}][VerificationHandler] FATAL: challenge receipt failed for epoch {}: {}", self.route_name, epoch, e);
+                    }
+                },
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Invalid claim") || err_msg.contains("already") {
+                        println!("[{}][VerificationHandler] Claim already challenged - bridge is safe", self.route_name);
+                        return true;
+                    }
+                    panic!("[{}][VerificationHandler] FATAL: challenge failed for epoch {}: {}", self.route_name, epoch, e);
+                }
+            }
+        }
+    }
+
+    async fn call_send_snapshot(&self, epoch: u64, claim: Claim) -> bool {
+        println!("[{}][VerificationHandler] Calling sendSnapshot for epoch {}", self.route_name, epoch);
+
+        if self.weth_address.is_some() {
+            let inbox = IVeaInboxArbToGnosis::new(self.inbox_address, self.inbox_provider.clone());
+            let gas_limit = U256::from(500000);
+            match inbox.sendSnapshot(U256::from(epoch), gas_limit, claim).send().await {
+                Ok(pending) => match pending.get_receipt().await {
+                    Ok(receipt) => {
+                        if receipt.status() {
+                            println!("[{}][VerificationHandler] sendSnapshot succeeded for epoch {}", self.route_name, epoch);
+                            true
+                        } else {
+                            panic!("[{}][VerificationHandler] FATAL: sendSnapshot reverted for epoch {}", self.route_name, epoch);
+                        }
+                    }
+                    Err(e) => {
+                        panic!("[{}][VerificationHandler] FATAL: sendSnapshot receipt failed for epoch {}: {}", self.route_name, epoch, e);
+                    }
+                },
+                Err(e) => {
+                    panic!("[{}][VerificationHandler] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
+                }
+            }
+        } else {
+            let inbox = IVeaInboxArbToEth::new(self.inbox_address, self.inbox_provider.clone());
+            match inbox.sendSnapshot(U256::from(epoch), claim).send().await {
+                Ok(pending) => match pending.get_receipt().await {
+                    Ok(receipt) => {
+                        if receipt.status() {
+                            println!("[{}][VerificationHandler] sendSnapshot succeeded for epoch {}", self.route_name, epoch);
+                            true
+                        } else {
+                            panic!("[{}][VerificationHandler] FATAL: sendSnapshot reverted for epoch {}", self.route_name, epoch);
+                        }
+                    }
+                    Err(e) => {
+                        panic!("[{}][VerificationHandler] FATAL: sendSnapshot receipt failed for epoch {}: {}", self.route_name, epoch, e);
+                    }
+                },
+                Err(e) => {
+                    panic!("[{}][VerificationHandler] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
                 }
             }
         }

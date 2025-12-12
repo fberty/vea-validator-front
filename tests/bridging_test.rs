@@ -105,8 +105,7 @@ async fn test_l2_to_l1_finder_discovers_snapshot_sent_event() {
 
     let arb_provider_dyn: DynProvider<Ethereum> = route.inbox_provider.clone();
 
-    let finder = L2ToL1Finder::new(arb_provider_dyn)
-        .add_inbox(route.inbox_address, &schedule_path);
+    let finder = L2ToL1Finder::new(arb_provider_dyn, route.inbox_address, &schedule_path, "ARB_TO_ETH");
 
     let finder_handle = tokio::spawn(async move {
         finder.run().await;
@@ -384,8 +383,7 @@ async fn test_full_arb_to_eth_relay_flow() {
 
     let arb_provider_dyn: DynProvider<Ethereum> = route.inbox_provider.clone();
 
-    let finder = L2ToL1Finder::new(arb_provider_dyn.clone())
-        .add_inbox(route.inbox_address, &schedule_path);
+    let finder = L2ToL1Finder::new(arb_provider_dyn.clone(), route.inbox_address, &schedule_path, "ARB_TO_ETH");
 
     let finder_handle = tokio::spawn(async move {
         finder.run().await;
@@ -571,39 +569,55 @@ async fn test_claim_finder_challenges_invalid_claim() {
     let schedule_path = tmp_dir.path().join("verification.json");
     let claims_path = tmp_dir.path().join("claims.json");
 
-    let wallet_address = c.wallet.default_signer().address();
-
     let finder = ClaimFinder::new(
         route.inbox_provider.clone(),
         route.outbox_provider.clone(),
         route.inbox_address,
         route.outbox_address,
         None,
-        wallet_address,
         &schedule_path,
         &claims_path,
         "TEST",
     );
 
+    let schedule_file: ScheduleFile<VerificationTask> = ScheduleFile::new(&schedule_path);
+
     let finder_handle = tokio::spawn(async move {
         finder.run().await;
     });
 
-    let result = timeout(Duration::from_secs(30), async {
+    let scheduled = timeout(Duration::from_secs(30), async {
         loop {
-            let claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
-            if claim_hash != original_claim_hash {
-                println!("Claim hash changed to: {:?}", claim_hash);
+            let schedule = schedule_file.load();
+            if schedule.pending.iter().any(|t| matches!(t.phase, VerificationPhase::Challenge)) {
+                println!("Challenge task scheduled!");
                 return true;
             }
-
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await;
 
     finder_handle.abort();
+    assert!(scheduled.is_ok(), "ClaimFinder should have scheduled a Challenge task");
 
-    assert!(result.is_ok(), "ClaimFinder should have challenged the invalid claim (claim hash should change)");
+    let wallet_address = c.wallet.default_signer().address();
+    let handler = VerificationHandler::new(
+        route.inbox_provider.clone(),
+        route.inbox_address,
+        route.outbox_provider.clone(),
+        route.outbox_address,
+        None,
+        wallet_address,
+        &schedule_path,
+        "TEST",
+    );
+
+    handler.process_pending().await;
+
+    let claim_hash_after = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
+    assert!(claim_hash_after != original_claim_hash, "Claim hash should change after challenge");
+    println!("Claim hash changed to: {:?}", claim_hash_after);
+
     println!("\nCLAIM FINDER CHALLENGE TEST PASSED!");
 }
 
@@ -656,15 +670,12 @@ async fn test_claim_finder_schedules_valid_claim_verification() {
     let schedule_path = tmp_dir.path().join("verification.json");
     let claims_path = tmp_dir.path().join("claims.json");
 
-    let wallet_address = c.wallet.default_signer().address();
-
     let finder = ClaimFinder::new(
         route.inbox_provider.clone(),
         route.outbox_provider.clone(),
         route.inbox_address,
         route.outbox_address,
         None,
-        wallet_address,
         &schedule_path,
         &claims_path,
         "TEST",
@@ -758,15 +769,12 @@ async fn test_verification_handler_calls_start_verification() {
     let schedule_path = tmp_dir.path().join("verification.json");
     let claims_path = tmp_dir.path().join("claims.json");
 
-    let wallet_address = c.wallet.default_signer().address();
-
     let finder = ClaimFinder::new(
         route.inbox_provider.clone(),
         route.outbox_provider.clone(),
         route.inbox_address,
         route.outbox_address,
         None,
-        wallet_address,
         &schedule_path,
         &claims_path,
         "TEST",
@@ -792,10 +800,14 @@ async fn test_verification_handler_calls_start_verification() {
 
     advance_time(seq_delay + epoch_period + 10).await;
 
+    let wallet_address = c.wallet.default_signer().address();
     let handler = VerificationHandler::new(
+        route.inbox_provider.clone(),
+        route.inbox_address,
         route.outbox_provider.clone(),
         route.outbox_address,
         None,
+        wallet_address,
         &schedule_path,
         "TEST",
     );
@@ -892,7 +904,6 @@ async fn test_verification_handler_calls_verify_snapshot() {
         route.inbox_address,
         route.outbox_address,
         None,
-        wallet_address,
         &schedule_path,
         &claims_path,
         "TEST",
@@ -918,10 +929,14 @@ async fn test_verification_handler_calls_verify_snapshot() {
 
     advance_time(min_challenge + 10).await;
 
+    let wallet_address = c.wallet.default_signer().address();
     let handler = VerificationHandler::new(
+        route.inbox_provider.clone(),
+        route.inbox_address,
         route.outbox_provider.clone(),
         route.outbox_address,
         None,
+        wallet_address,
         &schedule_path,
         "TEST",
     );
@@ -999,16 +1014,26 @@ async fn test_full_arb_to_gnosis_amb_flow() {
     let claims_path = tmp_dir.path().join("claims.json");
     let l2_schedule_path = tmp_dir.path().join("l2_to_l1.json");
 
-    let wallet_address = c.wallet.default_signer().address();
     let claim_finder = ClaimFinder::new(
         gnosis_route.inbox_provider.clone(),
         gnosis_route.outbox_provider.clone(),
         gnosis_route.inbox_address,
         gnosis_route.outbox_address,
         gnosis_route.weth_address,
-        wallet_address,
         &claim_schedule_path,
         &claims_path,
+        "TEST",
+    );
+
+    let wallet_address = c.wallet.default_signer().address();
+    let verification_handler = VerificationHandler::new(
+        gnosis_route.inbox_provider.clone(),
+        gnosis_route.inbox_address,
+        gnosis_route.outbox_provider.clone(),
+        gnosis_route.outbox_address,
+        gnosis_route.weth_address,
+        wallet_address,
+        &claim_schedule_path,
         "TEST",
     );
 
@@ -1018,11 +1043,18 @@ async fn test_full_arb_to_gnosis_amb_flow() {
         claim_finder.run().await;
     });
 
-    println!("Phase 3: Waiting for ClaimFinder to challenge and call sendSnapshot...");
+    println!("Phase 3: Waiting for ClaimFinder to schedule challenge, then executing...");
 
+    let schedule_file: ScheduleFile<VerificationTask> = ScheduleFile::new(&claim_schedule_path);
     let snapshot_sent_sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
+
     let snapshot_sent = timeout(Duration::from_secs(120), async {
         loop {
+            let schedule = schedule_file.load();
+            println!("  Pending tasks: {:?}", schedule.pending.iter().map(|t| format!("{:?}", t.phase)).collect::<Vec<_>>());
+
+            verification_handler.process_pending().await;
+
             let filter = alloy::rpc::types::Filter::new()
                 .address(inbox_address)
                 .event_signature(snapshot_sent_sig);
@@ -1030,16 +1062,16 @@ async fn test_full_arb_to_gnosis_amb_flow() {
             if !logs.is_empty() {
                 return logs[0].clone();
             }
+
             advance_time(16 * 60).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_secs(6)).await;
         }
-    }).await.expect("ClaimFinder should challenge invalid claim and call sendSnapshot");
+    }).await.expect("Should challenge invalid claim and call sendSnapshot");
 
     claim_finder_handle.abort();
-    println!("Phase 4: ClaimFinder challenged bad claim AND called sendSnapshot - SnapshotSent at block {:?}", snapshot_sent.block_number);
+    println!("Phase 4: Challenged bad claim AND called sendSnapshot - SnapshotSent at block {:?}", snapshot_sent.block_number);
 
-    let l2_finder = L2ToL1Finder::new(gnosis_route.inbox_provider.clone())
-        .add_inbox(gnosis_route.inbox_address, &l2_schedule_path);
+    let l2_finder = L2ToL1Finder::new(gnosis_route.inbox_provider.clone(), gnosis_route.inbox_address, &l2_schedule_path, "ARB_TO_GNOSIS");
 
     let l2_finder_handle = tokio::spawn(async move {
         l2_finder.run().await;

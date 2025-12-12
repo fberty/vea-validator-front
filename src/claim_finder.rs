@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::cmp::min;
 use tokio::time::{sleep, Duration};
 
-use crate::contracts::{IVeaInboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, Claim, Party};
+use crate::contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
 use crate::scheduler::{ClaimedData, ScheduleData, ScheduleFile, VerificationTask, VerificationPhase};
 
 const CHUNK_SIZE: u64 = 500;
@@ -20,7 +20,6 @@ pub struct ClaimFinder {
     inbox_address: Address,
     outbox_address: Address,
     weth_address: Option<Address>,
-    wallet_address: Address,
     schedule_path: PathBuf,
     claims_path: PathBuf,
     route_name: &'static str,
@@ -33,7 +32,6 @@ impl ClaimFinder {
         inbox_address: Address,
         outbox_address: Address,
         weth_address: Option<Address>,
-        wallet_address: Address,
         schedule_path: impl Into<PathBuf>,
         claims_path: impl Into<PathBuf>,
         route_name: &'static str,
@@ -44,7 +42,6 @@ impl ClaimFinder {
             inbox_address,
             outbox_address,
             weth_address,
-            wallet_address,
             schedule_path: schedule_path.into(),
             claims_path: claims_path.into(),
             route_name,
@@ -116,7 +113,7 @@ impl ClaimFinder {
                         } else if topic0 == verification_started_sig {
                             self.handle_verification_started_event(&log, &mut schedule, &claims_file).await;
                         } else if topic0 == challenged_sig {
-                            self.handle_challenged_event(&log, &claims_file).await;
+                            self.handle_challenged_event(&log, &mut schedule, &claims_file, now).await;
                         }
                     }
                     schedule.last_checked_block = Some(to_block);
@@ -183,19 +180,18 @@ impl ClaimFinder {
         };
 
         if state_root != correct_root {
-            println!("[{}][ClaimFinder] INVALID claim detected for epoch {} - challenging!", self.route_name, epoch);
-            let claim = Claim {
-                stateRoot: state_root,
+            println!("[{}][ClaimFinder] INVALID claim detected for epoch {} - scheduling challenge!", self.route_name, epoch);
+            schedule.pending.push(VerificationTask {
+                epoch,
+                execute_after: now,
+                phase: VerificationPhase::Challenge,
+                state_root,
                 claimer,
-                timestampClaimed: timestamp_claimed,
-                timestampVerification: 0,
-                blocknumberVerification: 0,
-                honest: Party::None,
+                timestamp_claimed,
+                timestamp_verification: 0,
+                blocknumber_verification: 0,
                 challenger: Address::ZERO,
-            };
-            if let Err(e) = self.challenge_claim(epoch, claim).await {
-                eprintln!("[{}][ClaimFinder] Challenge failed for epoch {}: {}", self.route_name, epoch, e);
-            }
+            });
             return;
         }
 
@@ -223,6 +219,7 @@ impl ClaimFinder {
             timestamp_claimed,
             timestamp_verification: 0,
             blocknumber_verification: 0,
+            challenger: Address::ZERO,
         });
     }
 
@@ -278,10 +275,11 @@ impl ClaimFinder {
             timestamp_claimed: claimed_data.timestamp_claimed,
             timestamp_verification: block_ts,
             blocknumber_verification: block_num,
+            challenger: Address::ZERO,
         });
     }
 
-    async fn handle_challenged_event(&self, log: &alloy::rpc::types::Log, claims_file: &ScheduleFile<ClaimedData>) {
+    async fn handle_challenged_event(&self, log: &alloy::rpc::types::Log, schedule: &mut ScheduleData<VerificationTask>, claims_file: &ScheduleFile<ClaimedData>, now: u64) {
         if log.topics().len() < 3 {
             return;
         }
@@ -297,60 +295,19 @@ impl ClaimFinder {
             }
         };
 
-        let claim = Claim {
-            stateRoot: claimed_data.state_root,
+        println!("[{}][ClaimFinder] Challenged event for epoch {} - scheduling sendSnapshot", self.route_name, epoch);
+
+        schedule.pending.push(VerificationTask {
+            epoch,
+            execute_after: now,
+            phase: VerificationPhase::SendSnapshot,
+            state_root: claimed_data.state_root,
             claimer: claimed_data.claimer,
-            timestampClaimed: claimed_data.timestamp_claimed,
-            timestampVerification: 0,
-            blocknumberVerification: 0,
-            honest: Party::None,
+            timestamp_claimed: claimed_data.timestamp_claimed,
+            timestamp_verification: 0,
+            blocknumber_verification: 0,
             challenger,
-        };
-
-        println!("[{}][ClaimFinder] Challenged event for epoch {} - calling sendSnapshot", self.route_name, epoch);
-
-        if self.weth_address.is_some() {
-            let inbox = IVeaInboxArbToGnosis::new(self.inbox_address, self.inbox_provider.clone());
-            let gas_limit = U256::from(500000);
-            match inbox.sendSnapshot(U256::from(epoch), gas_limit, claim).send().await {
-                Ok(pending) => {
-                    match pending.get_receipt().await {
-                        Ok(receipt) if receipt.status() => {
-                            println!("[{}][ClaimFinder] sendSnapshot succeeded for epoch {}", self.route_name, epoch);
-                        }
-                        Ok(_) => {
-                            panic!("[{}][ClaimFinder] FATAL: sendSnapshot reverted for epoch {}", self.route_name, epoch);
-                        }
-                        Err(e) => {
-                            panic!("[{}][ClaimFinder] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    panic!("[{}][ClaimFinder] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
-                }
-            }
-        } else {
-            let inbox = IVeaInboxArbToEth::new(self.inbox_address, self.inbox_provider.clone());
-            match inbox.sendSnapshot(U256::from(epoch), claim).send().await {
-                Ok(pending) => {
-                    match pending.get_receipt().await {
-                        Ok(receipt) if receipt.status() => {
-                            println!("[{}][ClaimFinder] sendSnapshot succeeded for epoch {}", self.route_name, epoch);
-                        }
-                        Ok(_) => {
-                            panic!("[{}][ClaimFinder] FATAL: sendSnapshot reverted for epoch {}", self.route_name, epoch);
-                        }
-                        Err(e) => {
-                            panic!("[{}][ClaimFinder] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    panic!("[{}][ClaimFinder] FATAL: sendSnapshot failed for epoch {}: {}", self.route_name, epoch, e);
-                }
-            }
-        }
+        });
     }
 
     async fn get_correct_state_root(&self, epoch: u64) -> Result<FixedBytes<32>, Box<dyn std::error::Error + Send + Sync>> {
@@ -380,49 +337,5 @@ impl ClaimFinder {
             let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.outbox_provider.clone());
             Ok(outbox.minChallengePeriod().call().await?.to::<u64>())
         }
-    }
-
-    async fn challenge_claim(&self, epoch: u64, claim: Claim) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.weth_address.is_some() {
-            let outbox = IVeaOutboxArbToGnosis::new(self.outbox_address, self.outbox_provider.clone());
-            let tx = outbox.challenge(U256::from(epoch), claim);
-            let pending = match tx.send().await {
-                Ok(p) => p,
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("Invalid claim") {
-                        println!("[{}][ClaimFinder] Claim already challenged - bridge is safe", self.route_name);
-                        return Ok(());
-                    }
-                    panic!("[{}][ClaimFinder] FATAL: Unexpected error challenging epoch {}: {}", self.route_name, epoch, e);
-                }
-            };
-            let receipt = pending.get_receipt().await?;
-            if !receipt.status() {
-                panic!("[{}][ClaimFinder] FATAL: Challenge tx reverted for epoch {}", self.route_name, epoch);
-            }
-            println!("[{}][ClaimFinder] Successfully challenged epoch {}", self.route_name, epoch);
-        } else {
-            let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.outbox_provider.clone());
-            let deposit = outbox.deposit().call().await?;
-            let tx = outbox.challenge(U256::from(epoch), claim, self.wallet_address).value(deposit);
-            let pending = match tx.send().await {
-                Ok(p) => p,
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("Invalid claim") {
-                        println!("[{}][ClaimFinder] Claim already challenged - bridge is safe", self.route_name);
-                        return Ok(());
-                    }
-                    panic!("[{}][ClaimFinder] FATAL: Unexpected error challenging epoch {}: {}", self.route_name, epoch, e);
-                }
-            };
-            let receipt = pending.get_receipt().await?;
-            if !receipt.status() {
-                panic!("[{}][ClaimFinder] FATAL: Challenge tx reverted for epoch {}", self.route_name, epoch);
-            }
-            println!("[{}][ClaimFinder] Successfully challenged epoch {}", self.route_name, epoch);
-        }
-        Ok(())
     }
 }

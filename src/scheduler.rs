@@ -71,6 +71,8 @@ pub struct ArbToL1Task {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VerificationPhase {
+    Challenge,
+    SendSnapshot,
     StartVerification,
     VerifySnapshot,
 }
@@ -85,6 +87,8 @@ pub struct VerificationTask {
     pub timestamp_claimed: u32,
     pub timestamp_verification: u32,
     pub blocknumber_verification: u32,
+    #[serde(default)]
+    pub challenger: Address,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
