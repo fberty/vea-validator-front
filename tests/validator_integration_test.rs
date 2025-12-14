@@ -118,12 +118,14 @@ async fn test_epoch_watcher_after_epoch_verifies_claim() {
 
     println!("Epoch {} snapshot saved: {:?}", current_epoch, snapshot);
 
-    advance_time(epoch_period + 70).await;
-
     let target_epoch = current_epoch;
+
+    let after_epoch_buffer = 15 * 60;
+    advance_time(epoch_period + after_epoch_buffer + 10).await;
+
     let dest_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let dest_timestamp = dest_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 70;
+    let target_timestamp = (target_epoch + 1) * epoch_period + after_epoch_buffer + 10;
     let advance_amount = target_timestamp.saturating_sub(dest_timestamp);
     if advance_amount > 0 {
         advance_time(advance_amount).await;
@@ -141,7 +143,7 @@ async fn test_epoch_watcher_after_epoch_verifies_claim() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    println!("Waiting for validator to submit claim after AFTER_EPOCH_BUFFER...");
+    println!("Waiting for validator to submit claim after AFTER_EPOCH_BUFFER (15min)...");
     let result = timeout(Duration::from_secs(15), async {
         loop {
             let claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
@@ -255,12 +257,14 @@ async fn test_race_condition_claim_already_made() {
 
     println!("Epoch {} snapshot saved: {:?}", current_epoch, snapshot);
 
-    advance_time(epoch_period + 70).await;
-
     let target_epoch = current_epoch;
+
+    let after_epoch_buffer = 15 * 60;
+    advance_time(epoch_period + after_epoch_buffer + 10).await;
+
     let dest_block = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap();
     let dest_timestamp = dest_block.header.timestamp;
-    let target_timestamp = (target_epoch + 1) * epoch_period + 70;
+    let target_timestamp = (target_epoch + 1) * epoch_period + after_epoch_buffer + 10;
     let advance_amount = target_timestamp.saturating_sub(dest_timestamp);
     if advance_amount > 0 {
         advance_time(advance_amount).await;

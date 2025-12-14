@@ -6,7 +6,7 @@ use std::error::Error;
 use crate::claim_handler::ClaimHandler;
 
 const BEFORE_EPOCH_BUFFER: u64 = 60;
-const AFTER_EPOCH_BUFFER: u64 = 60;
+const AFTER_EPOCH_BUFFER: u64 = 15 * 60;
 
 pub struct EpochWatcher {
     provider: DynProvider<Ethereum>,
