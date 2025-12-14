@@ -39,11 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         arb_to_eth_route.inbox_provider.clone(),
         arb_to_eth_claim_handler.clone(),
         "ARB_TO_ETH",
+        c.make_claims,
     );
     let arb_to_gnosis_epoch_watcher = EpochWatcher::new(
         arb_to_gnosis_route.inbox_provider.clone(),
         arb_to_gnosis_claim_handler.clone(),
         "ARB_TO_GNOSIS",
+        c.make_claims,
     );
 
     let arb_to_eth_l2_to_l1_finder = L2ToL1Finder::new(

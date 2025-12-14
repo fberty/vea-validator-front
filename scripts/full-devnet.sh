@@ -205,6 +205,9 @@ VEA_OUTBOX_ARB_TO_GNOSIS=$OUTBOX_ARB_TO_GNOSIS
 # Bridge mocks / infrastructure
 ARB_OUTBOX=$OUTBOX_MOCK
 WETH_GNOSIS=$WETH_GNOSIS
+
+# Validator settings
+MAKE_CLAIMS=true
 EOF
 
 echo "Arbitrum → Ethereum:"

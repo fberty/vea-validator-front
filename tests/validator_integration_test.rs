@@ -49,7 +49,7 @@ async fn test_epoch_watcher_saves_snapshot_before_epoch_ends() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST", true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });
@@ -136,7 +136,7 @@ async fn test_epoch_watcher_after_epoch_verifies_claim() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST", true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });
@@ -198,7 +198,7 @@ async fn test_epoch_watcher_no_duplicate_save_snapshot() {
 
     let claim_handler = Arc::new(ClaimHandler::new(route.clone(), c.wallet.default_signer().address()));
 
-    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST");
+    let epoch_watcher = EpochWatcher::new(route.inbox_provider.clone(), claim_handler.clone(), "TEST", true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });

@@ -34,6 +34,7 @@ pub struct ValidatorConfig {
     pub inbox_arb_to_gnosis: Address,
     pub outbox_arb_to_gnosis: Address,
     pub arb_outbox: Address,
+    pub make_claims: bool,
 }
 impl ValidatorConfig {
     pub fn build_routes(&self) -> Vec<Route> {
@@ -147,6 +148,10 @@ impl ValidatorConfig {
                 .expect("ARB_OUTBOX must be set")
         )?;
 
+        let make_claims = std::env::var("MAKE_CLAIMS")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .expect("MAKE_CLAIMS must be set");
+
         Ok(Self {
             private_key,
             wallet,
@@ -156,6 +161,7 @@ impl ValidatorConfig {
             inbox_arb_to_gnosis,
             outbox_arb_to_gnosis,
             arb_outbox,
+            make_claims,
         })
     }
 }

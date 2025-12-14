@@ -12,11 +12,12 @@ pub struct EpochWatcher {
     provider: DynProvider<Ethereum>,
     handler: Arc<ClaimHandler>,
     route_name: &'static str,
+    make_claims: bool,
 }
 
 impl EpochWatcher {
-    pub fn new(provider: DynProvider<Ethereum>, handler: Arc<ClaimHandler>, route_name: &'static str) -> Self {
-        Self { provider, handler, route_name }
+    pub fn new(provider: DynProvider<Ethereum>, handler: Arc<ClaimHandler>, route_name: &'static str, make_claims: bool) -> Self {
+        Self { provider, handler, route_name, make_claims }
     }
 
     async fn get_current_timestamp(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
@@ -42,13 +43,15 @@ impl EpochWatcher {
                 last_before_epoch = Some(current_epoch);
             }
 
-            let time_since_epoch_start = now.saturating_sub(current_epoch * epoch_period);
-            if time_since_epoch_start >= AFTER_EPOCH_BUFFER && current_epoch > 0 {
-                let prev_epoch = current_epoch - 1;
-                if last_after_epoch != Some(prev_epoch) {
-                    self.handler.handle_after_epoch_start(prev_epoch).await
-                        .unwrap_or_else(|e: Box<dyn Error + Send + Sync + 'static>| panic!("[{}] FATAL: Failed to handle after epoch start for epoch {}: {}", self.route_name, prev_epoch, e));
-                    last_after_epoch = Some(prev_epoch);
+            if self.make_claims {
+                let time_since_epoch_start = now.saturating_sub(current_epoch * epoch_period);
+                if time_since_epoch_start >= AFTER_EPOCH_BUFFER && current_epoch > 0 {
+                    let prev_epoch = current_epoch - 1;
+                    if last_after_epoch != Some(prev_epoch) {
+                        self.handler.handle_after_epoch_start(prev_epoch).await
+                            .unwrap_or_else(|e: Box<dyn Error + Send + Sync + 'static>| panic!("[{}] FATAL: Failed to handle after epoch start for epoch {}: {}", self.route_name, prev_epoch, e));
+                        last_after_epoch = Some(prev_epoch);
+                    }
                 }
             }
 
