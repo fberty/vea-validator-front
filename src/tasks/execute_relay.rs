@@ -19,6 +19,7 @@ pub async fn execute(
     l2_timestamp: u64,
     amount: U256,
     data: Bytes,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let outbox = IOutbox::new(arb_outbox_address, eth_provider);
 
@@ -41,6 +42,8 @@ pub async fn execute(
             amount,
             data,
         ).send().await,
+        "executeTransaction",
+        route_name,
         &[],
     ).await
 }

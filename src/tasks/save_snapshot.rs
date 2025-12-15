@@ -8,7 +8,7 @@ pub async fn execute(
     inbox_provider: DynProvider<Ethereum>,
     inbox_address: Address,
     epoch: u64,
-    _route_name: &str,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider.clone());
 
@@ -53,5 +53,5 @@ pub async fn execute(
         }
     }
 
-    send_tx(inbox.saveSnapshot().send().await, &[]).await
+    send_tx(inbox.saveSnapshot().send().await, "saveSnapshot", route_name, &[]).await
 }

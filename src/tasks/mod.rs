@@ -18,20 +18,24 @@ use std::path::PathBuf;
 
 pub async fn send_tx(
     result: Result<PendingTransactionBuilder<Ethereum>, ContractError>,
+    action: &str,
+    route_name: &str,
     race_ok: &[&str],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match result {
         Ok(pending) => {
             let receipt = pending.get_receipt().await?;
             if !receipt.status() {
-                return Err("transaction reverted".into());
+                return Err(format!("[{}] {} reverted", route_name, action).into());
             }
+            println!("[{}] {} succeeded", route_name, action);
             Ok(())
         }
         Err(e) => {
             let err_msg = e.to_string();
             for pattern in race_ok {
                 if err_msg.contains(pattern) {
+                    println!("[{}] {} already done", route_name, action);
                     return Ok(());
                 }
             }

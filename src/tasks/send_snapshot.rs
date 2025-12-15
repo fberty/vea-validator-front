@@ -13,7 +13,7 @@ pub async fn execute(
     claimer: Address,
     timestamp_claimed: u32,
     challenger: Address,
-    _route_name: &str,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let claim = Claim {
         stateRoot: state_root,
@@ -30,12 +30,16 @@ pub async fn execute(
         let gas_limit = U256::from(500000);
         send_tx(
             inbox.sendSnapshot(U256::from(epoch), gas_limit, claim).send().await,
+            "sendSnapshot",
+            route_name,
             &[],
         ).await
     } else {
         let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider);
         send_tx(
             inbox.sendSnapshot(U256::from(epoch), claim).send().await,
+            "sendSnapshot",
+            route_name,
             &[],
         ).await
     }

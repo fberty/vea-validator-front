@@ -13,7 +13,7 @@ pub async fn execute(
     state_root: FixedBytes<32>,
     claimer: Address,
     timestamp_claimed: u32,
-    _route_name: &str,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let claim = Claim {
         stateRoot: state_root,
@@ -29,6 +29,8 @@ pub async fn execute(
         let outbox = IVeaOutboxArbToGnosis::new(outbox_address, outbox_provider);
         send_tx(
             outbox.challenge(U256::from(epoch), claim).send().await,
+            "challenge",
+            route_name,
             &["Invalid claim", "already"],
         ).await
     } else {
@@ -36,6 +38,8 @@ pub async fn execute(
         let deposit = outbox.deposit().call().await?;
         send_tx(
             outbox.challenge(U256::from(epoch), claim, wallet_address).value(deposit).send().await,
+            "challenge",
+            route_name,
             &["Invalid claim", "already"],
         ).await
     }

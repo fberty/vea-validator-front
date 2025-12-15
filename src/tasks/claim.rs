@@ -10,7 +10,7 @@ pub async fn execute(
     outbox_provider: DynProvider<Ethereum>,
     outbox_address: Address,
     epoch: u64,
-    _route_name: &str,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider);
     let outbox = IVeaOutboxArbToEth::new(outbox_address, outbox_provider);
@@ -28,6 +28,8 @@ pub async fn execute(
     let deposit = outbox.deposit().call().await?;
     send_tx(
         outbox.claim(U256::from(epoch), state_root).value(deposit).send().await,
+        "claim",
+        route_name,
         &["already"],
     ).await
 }

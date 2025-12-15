@@ -13,7 +13,7 @@ pub async fn execute(
     timestamp_claimed: u32,
     timestamp_verification: u32,
     blocknumber_verification: u32,
-    _route_name: &str,
+    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let claim = Claim {
         stateRoot: state_root,
@@ -28,6 +28,8 @@ pub async fn execute(
     let outbox = IVeaOutbox::new(outbox_address, outbox_provider);
     send_tx(
         outbox.verifySnapshot(U256::from(epoch), claim).send().await,
+        "verifySnapshot",
+        route_name,
         &["already"],
     ).await
 }
