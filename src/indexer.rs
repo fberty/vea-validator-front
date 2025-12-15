@@ -1,11 +1,11 @@
 use alloy::primitives::{Address, Bytes, FixedBytes, U256};
-use alloy::providers::{DynProvider, Provider};
-use alloy::network::Ethereum;
+use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use std::path::PathBuf;
 use std::cmp::min;
 use tokio::time::{sleep, Duration};
 
+use crate::config::Route;
 use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
 use crate::tasks::{Task, TaskStore, ClaimStore, ClaimData, send_snapshot};
 
@@ -18,36 +18,21 @@ const RELAY_DELAY: u64 = 7 * 24 * 3600 + 3600;
 const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
 
 pub struct EventIndexer {
-    inbox_provider: DynProvider<Ethereum>,
-    inbox_address: Address,
-    outbox_provider: DynProvider<Ethereum>,
-    outbox_address: Address,
-    weth_address: Option<Address>,
+    route: Route,
     task_store: TaskStore,
     claim_store: ClaimStore,
-    route_name: &'static str,
 }
 
 impl EventIndexer {
     pub fn new(
-        inbox_provider: DynProvider<Ethereum>,
-        inbox_address: Address,
-        outbox_provider: DynProvider<Ethereum>,
-        outbox_address: Address,
-        weth_address: Option<Address>,
+        route: Route,
         schedule_path: impl Into<PathBuf>,
         claims_path: impl Into<PathBuf>,
-        route_name: &'static str,
     ) -> Self {
         Self {
-            inbox_provider,
-            inbox_address,
-            outbox_provider,
-            outbox_address,
-            weth_address,
+            route,
             task_store: TaskStore::new(schedule_path),
             claim_store: ClaimStore::new(claims_path),
-            route_name,
         }
     }
 
@@ -71,10 +56,10 @@ impl EventIndexer {
     async fn scan_inbox(&self) -> bool {
         let snapshot_sent_sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
 
-        let raw_block = match self.inbox_provider.get_block_number().await {
+        let raw_block = match self.route.inbox_provider.get_block_number().await {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get inbox block number: {}", self.route_name, e);
+                eprintln!("[{}][Indexer] Failed to get inbox block number: {}", self.route.name, e);
                 return true;
             }
         };
@@ -91,12 +76,12 @@ impl EventIndexer {
         let to_block = min(from_block + CHUNK_SIZE, current_block);
 
         let filter = Filter::new()
-            .address(self.inbox_address)
+            .address(self.route.inbox_address)
             .event_signature(snapshot_sent_sig)
             .from_block(from_block)
             .to_block(to_block);
 
-        match self.inbox_provider.get_logs(&filter).await {
+        match self.route.inbox_provider.get_logs(&filter).await {
             Ok(logs) => {
                 for log in logs {
                     self.handle_snapshot_sent(&log).await;
@@ -104,14 +89,14 @@ impl EventIndexer {
                 self.task_store.update_inbox_block(to_block);
                 println!(
                     "[{}][Indexer] Inbox scanned blocks {}-{}",
-                    self.route_name, from_block, to_block
+                    self.route.name, from_block, to_block
                 );
                 to_block >= current_block
             }
             Err(e) => {
                 eprintln!(
                     "[{}][Indexer] Failed to query inbox logs {}-{}: {}",
-                    self.route_name, from_block, to_block, e
+                    self.route.name, from_block, to_block, e
                 );
                 true
             }
@@ -123,15 +108,15 @@ impl EventIndexer {
         let verification_started_sig = alloy::primitives::keccak256("VerificationStarted(uint256)");
         let challenged_sig = alloy::primitives::keccak256("Challenged(uint256,address)");
 
-        let current_block = match self.outbox_provider.get_block_number().await {
+        let current_block = match self.route.outbox_provider.get_block_number().await {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get outbox block number: {}", self.route_name, e);
+                eprintln!("[{}][Indexer] Failed to get outbox block number: {}", self.route.name, e);
                 return true;
             }
         };
 
-        let current_block_data = match self.outbox_provider.get_block_by_number(current_block.into()).await {
+        let current_block_data = match self.route.outbox_provider.get_block_by_number(current_block.into()).await {
             Ok(Some(b)) => b,
             _ => return true,
         };
@@ -148,12 +133,12 @@ impl EventIndexer {
         let to_block = min(from_block + CHUNK_SIZE, current_block);
 
         let filter = Filter::new()
-            .address(self.outbox_address)
+            .address(self.route.outbox_address)
             .event_signature(vec![claimed_sig, verification_started_sig, challenged_sig])
             .from_block(from_block)
             .to_block(to_block);
 
-        match self.outbox_provider.get_logs(&filter).await {
+        match self.route.outbox_provider.get_logs(&filter).await {
             Ok(logs) => {
                 for log in logs {
                     let block_ts = log.block_timestamp.unwrap_or(0);
@@ -177,14 +162,14 @@ impl EventIndexer {
                 self.task_store.update_outbox_block(to_block);
                 println!(
                     "[{}][Indexer] Outbox scanned blocks {}-{}",
-                    self.route_name, from_block, to_block
+                    self.route.name, from_block, to_block
                 );
                 to_block >= current_block
             }
             Err(e) => {
                 eprintln!(
                     "[{}][Indexer] Failed to query outbox logs {}-{}: {}",
-                    self.route_name, from_block, to_block, e
+                    self.route.name, from_block, to_block, e
                 );
                 true
             }
@@ -211,7 +196,7 @@ impl EventIndexer {
             Some(task) => {
                 println!(
                     "[{}][Indexer] Found SnapshotSent: epoch={}, position={:#x}",
-                    self.route_name, epoch, task.2
+                    self.route.name, epoch, task.2
                 );
                 self.task_store.add_task(Task::ExecuteRelay {
                     epoch: task.0,
@@ -227,7 +212,7 @@ impl EventIndexer {
                 });
             }
             None => {
-                eprintln!("[{}][Indexer] No L2ToL1Tx found in tx {:?}", self.route_name, tx_hash);
+                eprintln!("[{}][Indexer] No L2ToL1Tx found in tx {:?}", self.route.name, tx_hash);
             }
         }
     }
@@ -260,7 +245,7 @@ impl EventIndexer {
             timestamp_claimed,
         });
 
-        println!("[{}][Indexer] Claimed event for epoch {} - scheduling VerifyClaim", self.route_name, epoch);
+        println!("[{}][Indexer] Claimed event for epoch {} - scheduling VerifyClaim", self.route.name, epoch);
 
         self.task_store.add_task(Task::VerifyClaim {
             epoch,
@@ -292,7 +277,7 @@ impl EventIndexer {
         let min_challenge_period = match self.get_min_challenge_period().await {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get minChallengePeriod: {}", self.route_name, e);
+                eprintln!("[{}][Indexer] Failed to get minChallengePeriod: {}", self.route.name, e);
                 return;
             }
         };
@@ -302,7 +287,7 @@ impl EventIndexer {
         let execute_after = (block_ts as u64) + min_challenge_period;
         println!(
             "[{}][Indexer] VerificationStarted for epoch {} - scheduled verifySnapshot at {}",
-            self.route_name, epoch, execute_after
+            self.route.name, epoch, execute_after
         );
 
         state.tasks.push(Task::VerifySnapshot {
@@ -327,20 +312,20 @@ impl EventIndexer {
 
         let claim = self.claim_store.get(epoch);
 
-        println!("[{}][Indexer] Challenged event for epoch {} - sending snapshot immediately", self.route_name, epoch);
+        println!("[{}][Indexer] Challenged event for epoch {} - sending snapshot immediately", self.route.name, epoch);
 
         if let Err(e) = send_snapshot::execute(
-            self.inbox_provider.clone(),
-            self.inbox_address,
-            self.weth_address,
+            self.route.inbox_provider.clone(),
+            self.route.inbox_address,
+            self.route.weth_address,
             epoch,
             claim.state_root,
             claim.claimer,
             claim.timestamp_claimed,
             challenger,
-            self.route_name,
+            self.route.name,
         ).await {
-            eprintln!("[{}][Indexer] Failed to send snapshot for epoch {}: {}", self.route_name, epoch, e);
+            eprintln!("[{}][Indexer] Failed to send snapshot for epoch {}: {}", self.route.name, epoch, e);
         }
     }
 
@@ -356,7 +341,7 @@ impl EventIndexer {
         tx_hash: FixedBytes<32>,
         epoch: u64,
     ) -> Option<(u64, u64, U256, Address, Address, u64, u64, u64, U256, Bytes)> {
-        let receipt = self.inbox_provider.get_transaction_receipt(tx_hash).await.ok()??;
+        let receipt = self.route.inbox_provider.get_transaction_receipt(tx_hash).await.ok()??;
 
         let l2_to_l1_tx_sig = alloy::primitives::keccak256(
             "L2ToL1Tx(address,address,uint256,uint256,uint256,uint256,uint256,uint256,bytes)"
@@ -400,7 +385,7 @@ impl EventIndexer {
             };
 
             let block_number = receipt.block_number.unwrap_or(0);
-            let block_timestamp = match self.inbox_provider.get_block_by_number(block_number.into()).await {
+            let block_timestamp = match self.route.inbox_provider.get_block_by_number(block_number.into()).await {
                 Ok(Some(block)) => block.header.timestamp,
                 _ => 0,
             };
@@ -422,11 +407,11 @@ impl EventIndexer {
     }
 
     async fn get_min_challenge_period(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        if self.weth_address.is_some() {
-            let outbox = IVeaOutboxArbToGnosis::new(self.outbox_address, self.outbox_provider.clone());
+        if self.route.weth_address.is_some() {
+            let outbox = IVeaOutboxArbToGnosis::new(self.route.outbox_address, self.route.outbox_provider.clone());
             Ok(outbox.minChallengePeriod().call().await?.to::<u64>())
         } else {
-            let outbox = IVeaOutboxArbToEth::new(self.outbox_address, self.outbox_provider.clone());
+            let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, self.route.outbox_provider.clone());
             Ok(outbox.minChallengePeriod().call().await?.to::<u64>())
         }
     }

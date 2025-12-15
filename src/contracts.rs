@@ -23,6 +23,16 @@ sol! {
 
     #[derive(Debug)]
     #[sol(rpc)]
+    interface IVeaInbox {
+        function snapshots(uint256 epoch) external view returns (bytes32);
+        function epochPeriod() external view returns (uint256);
+        function epochNow() external view returns (uint256);
+        function saveSnapshot() external;
+        function sendMessage(address to, bytes calldata data) external returns (uint64);
+    }
+
+    #[derive(Debug)]
+    #[sol(rpc)]
     interface IVeaInboxArbToEth {
         event MessageSent(bytes _nodeData);
         event SnapshotSaved(bytes32 _snapshot, uint256 _epoch, uint64 _count);

@@ -25,6 +25,7 @@ pub struct Route {
     pub weth_address: Option<Address>,
 }
 
+#[derive(Clone)]
 pub struct ValidatorConfig {
     pub private_key: String,
     pub wallet: EthereumWallet,

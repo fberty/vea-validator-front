@@ -1,6 +1,3 @@
-use alloy::signers::local::PrivateKeySigner;
-use alloy::network::EthereumWallet;
-use std::str::FromStr;
 use vea_validator::{
     epoch_watcher::EpochWatcher,
     indexer::EventIndexer,
@@ -13,17 +10,15 @@ use vea_validator::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let c = ValidatorConfig::from_env()?;
-    let signer = PrivateKeySigner::from_str(&c.private_key)?;
-    let wallet = EthereumWallet::from(signer);
-    let wallet_address = wallet.default_signer().address();
+    let wallet_address = c.wallet.default_signer().address();
     println!("Validator wallet address: {}", wallet_address);
 
     let routes = c.build_routes();
     check_rpc_health(&routes).await?;
     check_balances(&c, &routes).await?;
 
-    let arb_to_eth_route = &routes[0];
-    let arb_to_gnosis_route = &routes[1];
+    let arb_to_eth_route = routes[0].clone();
+    let arb_to_gnosis_route = routes[1].clone();
 
     let inbox_contract = IVeaInboxArbToEth::new(arb_to_eth_route.inbox_address, arb_to_eth_route.inbox_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
@@ -46,47 +41,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let arb_to_eth_indexer = EventIndexer::new(
-        arb_to_eth_route.inbox_provider.clone(),
-        arb_to_eth_route.inbox_address,
-        arb_to_eth_route.outbox_provider.clone(),
-        arb_to_eth_route.outbox_address,
-        arb_to_eth_route.weth_address,
+        arb_to_eth_route.clone(),
         "schedules/arb_to_eth.json",
         "claims/arb_to_eth.json",
-        "ARB_TO_ETH",
     );
     let arb_to_gnosis_indexer = EventIndexer::new(
-        arb_to_gnosis_route.inbox_provider.clone(),
-        arb_to_gnosis_route.inbox_address,
-        arb_to_gnosis_route.outbox_provider.clone(),
-        arb_to_gnosis_route.outbox_address,
-        arb_to_gnosis_route.weth_address,
+        arb_to_gnosis_route.clone(),
         "schedules/arb_to_gnosis.json",
         "claims/arb_to_gnosis.json",
-        "ARB_TO_GNOSIS",
     );
 
     let arb_to_eth_dispatcher = TaskDispatcher::new(
-        arb_to_eth_route.inbox_provider.clone(),
-        arb_to_eth_route.inbox_address,
-        arb_to_eth_route.outbox_provider.clone(),
-        arb_to_eth_route.outbox_address,
-        c.arb_outbox,
-        arb_to_eth_route.weth_address,
-        wallet_address,
+        c.clone(),
+        arb_to_eth_route.clone(),
         "schedules/arb_to_eth.json",
-        "ARB_TO_ETH",
     );
     let arb_to_gnosis_dispatcher = TaskDispatcher::new(
-        arb_to_gnosis_route.inbox_provider.clone(),
-        arb_to_gnosis_route.inbox_address,
-        arb_to_gnosis_route.outbox_provider.clone(),
-        arb_to_gnosis_route.outbox_address,
-        c.arb_outbox,
-        arb_to_gnosis_route.weth_address,
-        wallet_address,
+        c.clone(),
+        arb_to_gnosis_route.clone(),
         "schedules/arb_to_gnosis.json",
-        "ARB_TO_GNOSIS",
     );
 
     println!("[ARB_TO_ETH] Inbox: {:?}, Outbox: {:?}", arb_to_eth_route.inbox_address, arb_to_eth_route.outbox_address);

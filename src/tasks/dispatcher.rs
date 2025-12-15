@@ -1,48 +1,29 @@
-use alloy::primitives::Address;
-use alloy::providers::{DynProvider, Provider};
-use alloy::network::Ethereum;
+use alloy::providers::Provider;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
+use crate::config::{Route, ValidatorConfig};
 use crate::tasks;
 use crate::tasks::{Task, TaskStore};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 pub struct TaskDispatcher {
-    inbox_provider: DynProvider<Ethereum>,
-    inbox_address: Address,
-    outbox_provider: DynProvider<Ethereum>,
-    outbox_address: Address,
-    arb_outbox_address: Address,
-    weth_address: Option<Address>,
-    wallet_address: Address,
+    config: ValidatorConfig,
+    route: Route,
     task_store: TaskStore,
-    route_name: &'static str,
 }
 
 impl TaskDispatcher {
     pub fn new(
-        inbox_provider: DynProvider<Ethereum>,
-        inbox_address: Address,
-        outbox_provider: DynProvider<Ethereum>,
-        outbox_address: Address,
-        arb_outbox_address: Address,
-        weth_address: Option<Address>,
-        wallet_address: Address,
+        config: ValidatorConfig,
+        route: Route,
         schedule_path: impl Into<PathBuf>,
-        route_name: &'static str,
     ) -> Self {
         Self {
-            inbox_provider,
-            inbox_address,
-            outbox_provider,
-            outbox_address,
-            arb_outbox_address,
-            weth_address,
-            wallet_address,
+            config,
+            route,
             task_store: TaskStore::new(schedule_path),
-            route_name,
         }
     }
 
@@ -56,7 +37,7 @@ impl TaskDispatcher {
     pub async fn process_pending(&self) {
         let state = self.task_store.load();
 
-        let now = match self.outbox_provider.get_block_by_number(Default::default()).await {
+        let now = match self.route.outbox_provider.get_block_by_number(Default::default()).await {
             Ok(Some(block)) => block.header.timestamp,
             _ => return,
         };
@@ -72,7 +53,7 @@ impl TaskDispatcher {
             return;
         }
 
-        println!("[{}][Dispatcher] Processing {} ready tasks", self.route_name, ready.len());
+        println!("[{}][Dispatcher] Processing {} ready tasks", self.route.name, ready.len());
 
         for task in ready {
             let success = self.execute_task(&task, now).await;
@@ -83,97 +64,93 @@ impl TaskDispatcher {
     }
 
     async fn execute_task(&self, task: &Task, current_timestamp: u64) -> bool {
+        let wallet_address = self.config.wallet.default_signer().address();
         match task {
             Task::SaveSnapshot { epoch, .. } => {
                 tasks::save_snapshot::execute(
-                    self.inbox_provider.clone(),
-                    self.inbox_address,
+                    self.route.inbox_provider.clone(),
+                    self.route.inbox_address,
                     *epoch,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::Claim { epoch, .. } => {
                 tasks::claim::execute(
-                    self.inbox_provider.clone(),
-                    self.inbox_address,
-                    self.outbox_provider.clone(),
-                    self.outbox_address,
+                    self.route.inbox_provider.clone(),
+                    self.route.inbox_address,
+                    self.route.outbox_provider.clone(),
+                    self.route.outbox_address,
                     *epoch,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::VerifyClaim { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::verify_claim::execute(
-                    self.inbox_provider.clone(),
-                    self.inbox_address,
-                    self.outbox_provider.clone(),
-                    self.outbox_address,
-                    self.weth_address,
-                    self.wallet_address,
+                    &self.route,
+                    wallet_address,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
                     current_timestamp,
                     &self.task_store,
-                    self.route_name,
                 ).await.is_ok()
             }
             Task::Challenge { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::challenge::execute(
-                    self.outbox_provider.clone(),
-                    self.outbox_address,
-                    self.weth_address,
-                    self.wallet_address,
+                    self.route.outbox_provider.clone(),
+                    self.route.outbox_address,
+                    self.route.weth_address,
+                    wallet_address,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::SendSnapshot { epoch, state_root, claimer, timestamp_claimed, challenger, .. } => {
                 tasks::send_snapshot::execute(
-                    self.inbox_provider.clone(),
-                    self.inbox_address,
-                    self.weth_address,
+                    self.route.inbox_provider.clone(),
+                    self.route.inbox_address,
+                    self.route.weth_address,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
                     *challenger,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::StartVerification { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::start_verification::execute(
-                    self.outbox_provider.clone(),
-                    self.outbox_address,
+                    self.route.outbox_provider.clone(),
+                    self.route.outbox_address,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::VerifySnapshot { epoch, state_root, claimer, timestamp_claimed, timestamp_verification, blocknumber_verification, .. } => {
                 tasks::verify_snapshot::execute(
-                    self.outbox_provider.clone(),
-                    self.outbox_address,
+                    self.route.outbox_provider.clone(),
+                    self.route.outbox_address,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
                     *timestamp_verification,
                     *blocknumber_verification,
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
             Task::ExecuteRelay { position, l2_sender, dest_addr, l2_block, l1_block, l2_timestamp, amount, data, .. } => {
                 tasks::execute_relay::execute(
-                    self.inbox_provider.clone(),
-                    self.outbox_provider.clone(),
-                    self.arb_outbox_address,
+                    self.route.inbox_provider.clone(),
+                    self.route.outbox_provider.clone(),
+                    self.config.arb_outbox,
                     *position,
                     *l2_sender,
                     *dest_addr,
@@ -182,7 +159,7 @@ impl TaskDispatcher {
                     *l2_timestamp,
                     *amount,
                     data.clone(),
-                    self.route_name,
+                    self.route.name,
                 ).await.is_ok()
             }
         }
