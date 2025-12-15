@@ -73,7 +73,7 @@ sol! {
         event Verified(uint256 indexed _epoch);
 
         function claim(uint256 _epoch, bytes32 _stateRoot) external payable;
-        function challenge(uint256 _epoch, Claim memory _claim, address _withdrawalAddress) external payable;
+        function challenge(uint256 _epoch, Claim memory _claim) external payable;
         function startVerification(uint256 _epoch, Claim memory _claim) external;
         function verifySnapshot(uint256 _epoch, Claim memory _claim) external;
         function withdrawClaimDeposit(uint256 _epoch, Claim memory _claim) external;

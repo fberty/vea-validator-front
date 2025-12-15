@@ -47,14 +47,7 @@ async fn test_epoch_watcher_saves_snapshot_before_epoch_ends() {
 
     println!("Current epoch: {}, messages sent, no snapshot yet", current_epoch);
 
-    let epoch_watcher = EpochWatcher::new(
-        route.inbox_provider.clone(),
-        route.inbox_address,
-        route.outbox_provider.clone(),
-        route.outbox_address,
-        "TEST",
-        true,
-    );
+    let epoch_watcher = EpochWatcher::new(route.clone(), true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });
@@ -139,14 +132,7 @@ async fn test_epoch_watcher_after_epoch_verifies_claim() {
     let initial_claim_hash = outbox.claimHashes(U256::from(target_epoch)).call().await.unwrap();
     assert_eq!(initial_claim_hash, FixedBytes::<32>::ZERO, "Claim should not exist yet");
 
-    let epoch_watcher = EpochWatcher::new(
-        route.inbox_provider.clone(),
-        route.inbox_address,
-        route.outbox_provider.clone(),
-        route.outbox_address,
-        "TEST",
-        true,
-    );
+    let epoch_watcher = EpochWatcher::new(route.clone(), true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });
@@ -206,14 +192,7 @@ async fn test_epoch_watcher_no_duplicate_save_snapshot() {
     let snapshot_before = inbox.snapshots(U256::from(current_epoch)).call().await.unwrap();
     println!("Snapshot already exists for epoch {}: {:?}", current_epoch, snapshot_before);
 
-    let epoch_watcher = EpochWatcher::new(
-        route.inbox_provider.clone(),
-        route.inbox_address,
-        route.outbox_provider.clone(),
-        route.outbox_address,
-        "TEST",
-        true,
-    );
+    let epoch_watcher = EpochWatcher::new(route.clone(), true);
     let watcher_handle = tokio::spawn(async move {
         epoch_watcher.watch_epochs(epoch_period).await
     });
@@ -295,14 +274,7 @@ async fn test_race_condition_claim_already_made() {
     println!("Claim already exists on-chain");
 
     println!("Our validator attempts to claim (should fail gracefully)...");
-    let result = tasks::claim::execute(
-        route.inbox_provider.clone(),
-        route.inbox_address,
-        route.outbox_provider.clone(),
-        route.outbox_address,
-        target_epoch,
-        "TEST",
-    ).await;
+    let result = tasks::claim::execute(route, target_epoch).await;
 
     match result {
         Err(e) => {

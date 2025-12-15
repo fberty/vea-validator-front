@@ -1,40 +1,37 @@
-use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, Provider};
-use alloy::network::Ethereum;
+use alloy::primitives::U256;
+use alloy::providers::Provider;
+use crate::config::Route;
 use crate::contracts::IVeaInboxArbToEth;
 use crate::tasks::send_tx;
 
 pub async fn execute(
-    inbox_provider: DynProvider<Ethereum>,
-    inbox_address: Address,
+    route: &Route,
     epoch: u64,
-    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider.clone());
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, route.inbox_provider.clone());
 
     let epoch_period = inbox.epochPeriod().call().await?.to::<u64>();
     let epoch_start_ts = epoch * epoch_period;
-    let current_block = inbox_provider.get_block_number().await?;
-    let current_ts = inbox_provider.get_block_by_number(current_block.into()).await?.unwrap().header.timestamp;
+    let current_block = route.inbox_provider.get_block_number().await?;
+    let current_ts = route.inbox_provider.get_block_by_number(current_block.into()).await?.unwrap().header.timestamp;
     let elapsed_ms = (current_ts - epoch_start_ts) * 1000;
-    let avg_block_millis: u64 = 250;
-    let from_block = current_block.saturating_sub(elapsed_ms * 110 / 100 / avg_block_millis);
+    let from_block = current_block.saturating_sub(elapsed_ms * 110 / 100 / (route.inbox_avg_block_millis as u64));
 
     let msg_sent_sig = alloy::primitives::keccak256("MessageSent(bytes)".as_bytes());
     let snapshot_saved_sig = alloy::primitives::keccak256("SnapshotSaved(bytes32,uint256,uint64)".as_bytes());
 
     let msg_filter = alloy::rpc::types::Filter::new()
-        .address(inbox_address)
+        .address(route.inbox_address)
         .event_signature(msg_sent_sig)
         .from_block(from_block);
     let snapshot_filter = alloy::rpc::types::Filter::new()
-        .address(inbox_address)
+        .address(route.inbox_address)
         .event_signature(snapshot_saved_sig)
         .from_block(from_block);
 
     let (msg_logs, snapshot_logs) = tokio::join!(
-        inbox_provider.get_logs(&msg_filter),
-        inbox_provider.get_logs(&snapshot_filter)
+        route.inbox_provider.get_logs(&msg_filter),
+        route.inbox_provider.get_logs(&snapshot_filter)
     );
 
     let msg_logs = msg_logs?;
@@ -53,5 +50,5 @@ pub async fn execute(
         }
     }
 
-    send_tx(inbox.saveSnapshot().send().await, "saveSnapshot", route_name, &[]).await
+    send_tx(inbox.saveSnapshot().send().await, "saveSnapshot", route.name, &[]).await
 }

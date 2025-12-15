@@ -1,35 +1,43 @@
-use alloy::primitives::{Address, FixedBytes, U256};
-use alloy::providers::DynProvider;
-use alloy::network::Ethereum;
-use crate::contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth};
+use alloy::primitives::{FixedBytes, U256};
+use crate::config::Route;
+use crate::contracts::{IVeaInbox, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
 use crate::tasks::send_tx;
 
 pub async fn execute(
-    inbox_provider: DynProvider<Ethereum>,
-    inbox_address: Address,
-    outbox_provider: DynProvider<Ethereum>,
-    outbox_address: Address,
+    route: &Route,
     epoch: u64,
-    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider);
-    let outbox = IVeaOutboxArbToEth::new(outbox_address, outbox_provider);
+    let inbox = IVeaInbox::new(route.inbox_address, route.inbox_provider.clone());
 
     let state_root = inbox.snapshots(U256::from(epoch)).call().await?;
     if state_root == FixedBytes::<32>::ZERO {
         return Ok(());
     }
 
-    let claim_hash = outbox.claimHashes(U256::from(epoch)).call().await?;
-    if claim_hash != FixedBytes::<32>::ZERO {
-        return Ok(());
+    if route.weth_address.is_some() {
+        let outbox = IVeaOutboxArbToGnosis::new(route.outbox_address, route.outbox_provider.clone());
+        let claim_hash = outbox.claimHashes(U256::from(epoch)).call().await?;
+        if claim_hash != FixedBytes::<32>::ZERO {
+            return Ok(());
+        }
+        send_tx(
+            outbox.claim(U256::from(epoch), state_root).send().await,
+            "claim",
+            route.name,
+            &["already"],
+        ).await
+    } else {
+        let outbox = IVeaOutboxArbToEth::new(route.outbox_address, route.outbox_provider.clone());
+        let claim_hash = outbox.claimHashes(U256::from(epoch)).call().await?;
+        if claim_hash != FixedBytes::<32>::ZERO {
+            return Ok(());
+        }
+        let deposit = outbox.deposit().call().await?;
+        send_tx(
+            outbox.claim(U256::from(epoch), state_root).value(deposit).send().await,
+            "claim",
+            route.name,
+            &["already"],
+        ).await
     }
-
-    let deposit = outbox.deposit().call().await?;
-    send_tx(
-        outbox.claim(U256::from(epoch), state_root).value(deposit).send().await,
-        "claim",
-        route_name,
-        &["already"],
-    ).await
 }

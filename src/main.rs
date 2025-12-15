@@ -23,22 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inbox_contract = IVeaInboxArbToEth::new(arb_to_eth_route.inbox_address, arb_to_eth_route.inbox_provider.clone());
     let epoch_period: u64 = inbox_contract.epochPeriod().call().await?.try_into()?;
 
-    let arb_to_eth_epoch_watcher = EpochWatcher::new(
-        arb_to_eth_route.inbox_provider.clone(),
-        arb_to_eth_route.inbox_address,
-        arb_to_eth_route.outbox_provider.clone(),
-        arb_to_eth_route.outbox_address,
-        "ARB_TO_ETH",
-        c.make_claims,
-    );
-    let arb_to_gnosis_epoch_watcher = EpochWatcher::new(
-        arb_to_gnosis_route.inbox_provider.clone(),
-        arb_to_gnosis_route.inbox_address,
-        arb_to_gnosis_route.outbox_provider.clone(),
-        arb_to_gnosis_route.outbox_address,
-        "ARB_TO_GNOSIS",
-        c.make_claims,
-    );
+    let arb_to_eth_epoch_watcher = EpochWatcher::new(arb_to_eth_route.clone(), c.make_claims);
+    let arb_to_gnosis_epoch_watcher = EpochWatcher::new(arb_to_gnosis_route.clone(), c.make_claims);
 
     let arb_to_eth_indexer = EventIndexer::new(
         arb_to_eth_route.clone(),

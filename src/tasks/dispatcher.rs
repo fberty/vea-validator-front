@@ -64,30 +64,16 @@ impl TaskDispatcher {
     }
 
     async fn execute_task(&self, task: &Task, current_timestamp: u64) -> bool {
-        let wallet_address = self.config.wallet.default_signer().address();
         match task {
             Task::SaveSnapshot { epoch, .. } => {
-                tasks::save_snapshot::execute(
-                    self.route.inbox_provider.clone(),
-                    self.route.inbox_address,
-                    *epoch,
-                    self.route.name,
-                ).await.is_ok()
+                tasks::save_snapshot::execute(&self.route, *epoch).await.is_ok()
             }
             Task::Claim { epoch, .. } => {
-                tasks::claim::execute(
-                    self.route.inbox_provider.clone(),
-                    self.route.inbox_address,
-                    self.route.outbox_provider.clone(),
-                    self.route.outbox_address,
-                    *epoch,
-                    self.route.name,
-                ).await.is_ok()
+                tasks::claim::execute(&self.route, *epoch).await.is_ok()
             }
             Task::VerifyClaim { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::verify_claim::execute(
                     &self.route,
-                    wallet_address,
                     *epoch,
                     *state_root,
                     *claimer,
@@ -98,58 +84,46 @@ impl TaskDispatcher {
             }
             Task::Challenge { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::challenge::execute(
-                    self.route.outbox_provider.clone(),
-                    self.route.outbox_address,
-                    self.route.weth_address,
-                    wallet_address,
+                    &self.route,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
-                    self.route.name,
                 ).await.is_ok()
             }
             Task::SendSnapshot { epoch, state_root, claimer, timestamp_claimed, challenger, .. } => {
                 tasks::send_snapshot::execute(
-                    self.route.inbox_provider.clone(),
-                    self.route.inbox_address,
-                    self.route.weth_address,
+                    &self.route,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
                     *challenger,
-                    self.route.name,
                 ).await.is_ok()
             }
             Task::StartVerification { epoch, state_root, claimer, timestamp_claimed, .. } => {
                 tasks::start_verification::execute(
-                    self.route.outbox_provider.clone(),
-                    self.route.outbox_address,
+                    &self.route,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
-                    self.route.name,
                 ).await.is_ok()
             }
             Task::VerifySnapshot { epoch, state_root, claimer, timestamp_claimed, timestamp_verification, blocknumber_verification, .. } => {
                 tasks::verify_snapshot::execute(
-                    self.route.outbox_provider.clone(),
-                    self.route.outbox_address,
+                    &self.route,
                     *epoch,
                     *state_root,
                     *claimer,
                     *timestamp_claimed,
                     *timestamp_verification,
                     *blocknumber_verification,
-                    self.route.name,
                 ).await.is_ok()
             }
             Task::ExecuteRelay { position, l2_sender, dest_addr, l2_block, l1_block, l2_timestamp, amount, data, .. } => {
                 tasks::execute_relay::execute(
-                    self.route.inbox_provider.clone(),
-                    self.route.outbox_provider.clone(),
+                    &self.route,
                     self.config.arb_outbox,
                     *position,
                     *l2_sender,
@@ -159,7 +133,6 @@ impl TaskDispatcher {
                     *l2_timestamp,
                     *amount,
                     data.clone(),
-                    self.route.name,
                 ).await.is_ok()
             }
         }

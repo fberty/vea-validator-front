@@ -7,7 +7,6 @@ const START_VERIFICATION_DELAY: u64 = 25 * 3600;
 
 pub async fn execute(
     route: &Route,
-    wallet_address: Address,
     epoch: u64,
     claimed_state_root: FixedBytes<32>,
     claimer: Address,
@@ -36,15 +35,11 @@ pub async fn execute(
         println!("[{}] Claim for epoch {} is INVALID! Challenging immediately", route.name, epoch);
         println!("[{}] Claimed: {:?}, Correct: {:?}", route.name, claimed_state_root, correct_state_root);
         challenge::execute(
-            route.outbox_provider.clone(),
-            route.outbox_address,
-            route.weth_address,
-            wallet_address,
+            route,
             epoch,
             claimed_state_root,
             claimer,
             timestamp_claimed,
-            route.name,
         ).await?;
     }
 

@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, Bytes, FixedBytes, U256};
-use alloy::providers::DynProvider;
-use alloy::network::Ethereum;
+use crate::config::Route;
 use crate::contracts::{IArbSys, INodeInterface, IOutbox};
 use crate::tasks::send_tx;
 
@@ -8,8 +7,7 @@ const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 const NODE_INTERFACE: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xC8]);
 
 pub async fn execute(
-    arb_provider: DynProvider<Ethereum>,
-    eth_provider: DynProvider<Ethereum>,
+    route: &Route,
     arb_outbox_address: Address,
     position: U256,
     l2_sender: Address,
@@ -19,16 +17,15 @@ pub async fn execute(
     l2_timestamp: u64,
     amount: U256,
     data: Bytes,
-    route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let outbox = IOutbox::new(arb_outbox_address, eth_provider);
+    let outbox = IOutbox::new(arb_outbox_address, route.outbox_provider.clone());
 
     let is_spent = outbox.isSpent(position).call().await?;
     if is_spent {
         return Ok(());
     }
 
-    let proof = fetch_outbox_proof(arb_provider, position).await?;
+    let proof = fetch_outbox_proof(route, position).await?;
 
     send_tx(
         outbox.executeTransaction(
@@ -43,20 +40,20 @@ pub async fn execute(
             data,
         ).send().await,
         "executeTransaction",
-        route_name,
+        route.name,
         &[],
     ).await
 }
 
 async fn fetch_outbox_proof(
-    arb_provider: DynProvider<Ethereum>,
+    route: &Route,
     position: U256,
 ) -> Result<Vec<FixedBytes<32>>, Box<dyn std::error::Error + Send + Sync>> {
-    let arb_sys = IArbSys::new(ARB_SYS, arb_provider.clone());
+    let arb_sys = IArbSys::new(ARB_SYS, route.inbox_provider.clone());
     let state = arb_sys.sendMerkleTreeState().call().await?;
     let size = state.size.to::<u64>();
 
-    let node_interface = INodeInterface::new(NODE_INTERFACE, arb_provider);
+    let node_interface = INodeInterface::new(NODE_INTERFACE, route.inbox_provider.clone());
     let leaf = position.to::<u64>();
     let result = node_interface.constructOutboxProof(size, leaf).call().await?;
 

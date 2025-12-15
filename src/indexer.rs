@@ -315,15 +315,12 @@ impl EventIndexer {
         println!("[{}][Indexer] Challenged event for epoch {} - sending snapshot immediately", self.route.name, epoch);
 
         if let Err(e) = send_snapshot::execute(
-            self.route.inbox_provider.clone(),
-            self.route.inbox_address,
-            self.route.weth_address,
+            &self.route,
             epoch,
             claim.state_root,
             claim.claimer,
             claim.timestamp_claimed,
             challenger,
-            self.route.name,
         ).await {
             eprintln!("[{}][Indexer] Failed to send snapshot for epoch {}: {}", self.route.name, epoch, e);
         }
