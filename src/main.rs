@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         arb_to_eth_route.outbox_address,
         arb_to_eth_route.weth_address,
         "schedules/arb_to_eth.json",
+        "claims/arb_to_eth.json",
         "ARB_TO_ETH",
     );
     let arb_to_gnosis_indexer = EventIndexer::new(
@@ -61,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         arb_to_gnosis_route.outbox_address,
         arb_to_gnosis_route.weth_address,
         "schedules/arb_to_gnosis.json",
+        "claims/arb_to_gnosis.json",
         "ARB_TO_GNOSIS",
     );
 

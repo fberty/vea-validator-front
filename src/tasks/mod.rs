@@ -159,6 +159,65 @@ pub struct RouteState {
     pub tasks: Vec<Task>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimData {
+    pub epoch: u64,
+    pub state_root: FixedBytes<32>,
+    pub claimer: Address,
+    pub timestamp_claimed: u32,
+}
+
+pub struct ClaimStore {
+    path: PathBuf,
+}
+
+impl ClaimStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn load_all(&self) -> Vec<ClaimData> {
+        match fs::read_to_string(&self.path) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn save_all(&self, claims: &[ClaimData]) {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).expect("Failed to create claims directory");
+        }
+        let contents = serde_json::to_string_pretty(claims).expect("Failed to serialize claims");
+        fs::write(&self.path, contents).expect("Failed to write claims file");
+    }
+
+    pub fn store(&self, claim: ClaimData) {
+        let mut claims = self.load_all();
+        let existing = claims.iter().filter(|c| c.epoch == claim.epoch).count();
+        if existing > 0 {
+            panic!("Duplicate claim for epoch {} - this should never happen", claim.epoch);
+        }
+        claims.push(claim);
+        self.save_all(&claims);
+    }
+
+    pub fn get(&self, epoch: u64) -> ClaimData {
+        let claims = self.load_all();
+        let matches: Vec<_> = claims.into_iter().filter(|c| c.epoch == epoch).collect();
+        match matches.len() {
+            0 => panic!("No claim found for epoch {}", epoch),
+            1 => matches.into_iter().next().unwrap(),
+            n => panic!("Multiple claims ({}) for epoch {} - impossible state", n, epoch),
+        }
+    }
+
+    pub fn remove(&self, epoch: u64) {
+        let mut claims = self.load_all();
+        claims.retain(|c| c.epoch != epoch);
+        self.save_all(&claims);
+    }
+}
+
 pub struct TaskStore {
     path: PathBuf,
 }

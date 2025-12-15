@@ -7,7 +7,7 @@ use std::cmp::min;
 use tokio::time::{sleep, Duration};
 
 use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
-use crate::tasks::{Task, TaskStore};
+use crate::tasks::{Task, TaskStore, ClaimStore, ClaimData};
 
 const CHUNK_SIZE: u64 = 500;
 const FINALITY_BUFFER_SECS: u64 = 15 * 60;
@@ -24,6 +24,7 @@ pub struct EventIndexer {
     outbox_address: Address,
     weth_address: Option<Address>,
     task_store: TaskStore,
+    claim_store: ClaimStore,
     route_name: &'static str,
 }
 
@@ -35,6 +36,7 @@ impl EventIndexer {
         outbox_address: Address,
         weth_address: Option<Address>,
         schedule_path: impl Into<PathBuf>,
+        claims_path: impl Into<PathBuf>,
         route_name: &'static str,
     ) -> Self {
         Self {
@@ -44,6 +46,7 @@ impl EventIndexer {
             outbox_address,
             weth_address,
             task_store: TaskStore::new(schedule_path),
+            claim_store: ClaimStore::new(claims_path),
             route_name,
         }
     }
@@ -246,6 +249,13 @@ impl EventIndexer {
             return;
         }
 
+        self.claim_store.store(ClaimData {
+            epoch,
+            state_root,
+            claimer,
+            timestamp_claimed,
+        });
+
         println!("[{}][Indexer] Claimed event for epoch {} - scheduling VerifyClaim", self.route_name, epoch);
 
         self.task_store.add_task(Task::VerifyClaim {
@@ -283,20 +293,7 @@ impl EventIndexer {
             }
         };
 
-        let verify_claim_task = state.tasks.iter().find(|t| matches!(t, Task::VerifyClaim { epoch: e, .. } if *e == epoch));
-        let (state_root, claimer, timestamp_claimed) = match verify_claim_task {
-            Some(Task::VerifyClaim { state_root, claimer, timestamp_claimed, .. }) => (*state_root, *claimer, *timestamp_claimed),
-            _ => {
-                let start_verification_task = state.tasks.iter().find(|t| matches!(t, Task::StartVerification { epoch: e, .. } if *e == epoch));
-                match start_verification_task {
-                    Some(Task::StartVerification { state_root, claimer, timestamp_claimed, .. }) => (*state_root, *claimer, *timestamp_claimed),
-                    _ => {
-                        eprintln!("[{}][Indexer] No claim data found for epoch {} during VerificationStarted", self.route_name, epoch);
-                        return;
-                    }
-                }
-            }
-        };
+        let claim = self.claim_store.get(epoch);
 
         let execute_after = (block_ts as u64) + min_challenge_period;
         println!(
@@ -307,9 +304,9 @@ impl EventIndexer {
         state.tasks.push(Task::VerifySnapshot {
             epoch,
             execute_after,
-            state_root,
-            claimer,
-            timestamp_claimed,
+            state_root: claim.state_root,
+            claimer: claim.claimer,
+            timestamp_claimed: claim.timestamp_claimed,
             timestamp_verification: block_ts,
             blocknumber_verification: block_num,
         });
@@ -324,30 +321,16 @@ impl EventIndexer {
         let epoch = U256::from_be_bytes(log.topics()[1].0).to::<u64>();
         let challenger = Address::from_slice(&log.topics()[2].0[12..]);
 
-        let state = self.task_store.load();
-        let verify_claim_task = state.tasks.iter().find(|t| matches!(t, Task::VerifyClaim { epoch: e, .. } if *e == epoch));
-        let (state_root, claimer, timestamp_claimed) = match verify_claim_task {
-            Some(Task::VerifyClaim { state_root, claimer, timestamp_claimed, .. }) => (*state_root, *claimer, *timestamp_claimed),
-            _ => {
-                let start_verification_task = state.tasks.iter().find(|t| matches!(t, Task::StartVerification { epoch: e, .. } if *e == epoch));
-                match start_verification_task {
-                    Some(Task::StartVerification { state_root, claimer, timestamp_claimed, .. }) => (*state_root, *claimer, *timestamp_claimed),
-                    _ => {
-                        eprintln!("[{}][Indexer] No claim data found for challenged epoch {}", self.route_name, epoch);
-                        return;
-                    }
-                }
-            }
-        };
+        let claim = self.claim_store.get(epoch);
 
         println!("[{}][Indexer] Challenged event for epoch {} - scheduling sendSnapshot", self.route_name, epoch);
 
         self.task_store.add_task(Task::SendSnapshot {
             epoch,
             execute_after: now,
-            state_root,
-            claimer,
-            timestamp_claimed,
+            state_root: claim.state_root,
+            claimer: claim.claimer,
+            timestamp_claimed: claim.timestamp_claimed,
             challenger,
         });
     }
