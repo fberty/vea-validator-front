@@ -9,9 +9,36 @@ pub mod verify_snapshot;
 pub mod execute_relay;
 
 use alloy::primitives::{Address, Bytes, FixedBytes, U256};
+use alloy::contract::Error as ContractError;
+use alloy::network::Ethereum;
+use alloy::providers::PendingTransactionBuilder;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+pub async fn send_tx(
+    result: Result<PendingTransactionBuilder<Ethereum>, ContractError>,
+    race_ok: &[&str],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match result {
+        Ok(pending) => {
+            let receipt = pending.get_receipt().await?;
+            if !receipt.status() {
+                return Err("transaction reverted".into());
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+            for pattern in race_ok {
+                if err_msg.contains(pattern) {
+                    return Ok(());
+                }
+            }
+            Err(e.into())
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]

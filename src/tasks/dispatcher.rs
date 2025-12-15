@@ -165,12 +165,11 @@ impl TaskDispatcher {
                     self.route_name,
                 ).await.is_ok()
             }
-            Task::ExecuteRelay { epoch, position, l2_sender, dest_addr, l2_block, l1_block, l2_timestamp, amount, data, .. } => {
+            Task::ExecuteRelay { position, l2_sender, dest_addr, l2_block, l1_block, l2_timestamp, amount, data, .. } => {
                 tasks::execute_relay::execute(
                     self.inbox_provider.clone(),
                     self.outbox_provider.clone(),
                     self.arb_outbox_address,
-                    *epoch,
                     *position,
                     *l2_sender,
                     *dest_addr,
@@ -179,7 +178,6 @@ impl TaskDispatcher {
                     *l2_timestamp,
                     *amount,
                     data.clone(),
-                    self.route_name,
                 ).await.is_ok()
             }
         }

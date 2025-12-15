@@ -2,12 +2,13 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::network::Ethereum;
 use crate::contracts::IVeaInboxArbToEth;
+use crate::tasks::send_tx;
 
 pub async fn execute(
     inbox_provider: DynProvider<Ethereum>,
     inbox_address: Address,
     epoch: u64,
-    route_name: &str,
+    _route_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inbox = IVeaInboxArbToEth::new(inbox_address, inbox_provider.clone());
 
@@ -38,7 +39,6 @@ pub async fn execute(
 
     let msg_logs = msg_logs?;
     if msg_logs.is_empty() {
-        println!("[{}] No messages in epoch {}, skipping saveSnapshot", route_name, epoch);
         return Ok(());
     }
 
@@ -48,19 +48,10 @@ pub async fn execute(
             let saved_count = U256::from_be_slice(&last_snapshot.data().data[64..96]).to::<u64>();
             let current_count = inbox.count().call().await?;
             if saved_count == current_count {
-                println!("[{}] Snapshot already saved for epoch {}", route_name, epoch);
                 return Ok(());
             }
         }
     }
 
-    println!("[{}] Calling saveSnapshot for epoch {}", route_name, epoch);
-    let tx = inbox.saveSnapshot();
-    let pending = tx.send().await?;
-    let receipt = pending.get_receipt().await?;
-    if !receipt.status() {
-        return Err("saveSnapshot transaction failed".into());
-    }
-    println!("[{}] saveSnapshot succeeded for epoch {}", route_name, epoch);
-    Ok(())
+    send_tx(inbox.saveSnapshot().send().await, &[]).await
 }
