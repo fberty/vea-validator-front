@@ -75,8 +75,9 @@ impl TaskDispatcher {
             TaskKind::Claim { .. } => {
                 tasks::claim::execute(&self.route, epoch).await.is_ok()
             }
-            TaskKind::VerifyClaim => {
-                tasks::verify_claim::execute(
+            TaskKind::ValidateClaim => {
+                tasks::validate_claim::execute(
+                    &self.config,
                     &self.route,
                     epoch,
                     &self.claim_store,
@@ -85,7 +86,7 @@ impl TaskDispatcher {
                 ).await.is_ok()
             }
             TaskKind::Challenge => {
-                tasks::challenge::execute(&self.route, epoch, &self.claim_store).await.is_ok()
+                tasks::challenge::execute(&self.config, &self.route, epoch, &self.claim_store).await.is_ok()
             }
             TaskKind::SendSnapshot => {
                 tasks::send_snapshot::execute(&self.route, epoch, &self.claim_store).await.is_ok()

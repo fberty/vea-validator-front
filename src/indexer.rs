@@ -260,12 +260,12 @@ impl EventIndexer {
             challenger: Address::ZERO,
         });
 
-        println!("[{}][Indexer] Claimed event for epoch {} - scheduling VerifyClaim", self.route.name, epoch);
+        println!("[{}][Indexer] Claimed event for epoch {} - scheduling ValidateClaim", self.route.name, epoch);
 
         self.task_store.add_task(Task {
             epoch,
             execute_after: now,
-            kind: TaskKind::VerifyClaim,
+            kind: TaskKind::ValidateClaim,
         });
     }
 

@@ -1,7 +1,7 @@
 pub mod dispatcher;
 pub mod save_snapshot;
 pub mod claim;
-pub mod verify_claim;
+pub mod validate_claim;
 pub mod challenge;
 pub mod send_snapshot;
 pub mod start_verification;
@@ -59,7 +59,7 @@ pub struct Task {
 pub enum TaskKind {
     SaveSnapshot,
     Claim { state_root: FixedBytes<32> },
-    VerifyClaim,
+    ValidateClaim,
     Challenge,
     SendSnapshot,
     StartVerification,
@@ -84,7 +84,7 @@ impl TaskKind {
         match self {
             TaskKind::SaveSnapshot => "SaveSnapshot",
             TaskKind::Claim { .. } => "Claim",
-            TaskKind::VerifyClaim => "VerifyClaim",
+            TaskKind::ValidateClaim => "ValidateClaim",
             TaskKind::Challenge => "Challenge",
             TaskKind::SendSnapshot => "SendSnapshot",
             TaskKind::StartVerification => "StartVerification",

@@ -1,11 +1,12 @@
 use alloy::primitives::{FixedBytes, U256};
-use crate::config::Route;
+use crate::config::{Route, ValidatorConfig};
 use crate::contracts::IVeaInbox;
 use crate::tasks::{Task, TaskKind, TaskStore, ClaimStore, challenge};
 
 const START_VERIFICATION_DELAY: u64 = 25 * 3600;
 
 pub async fn execute(
+    config: &ValidatorConfig,
     route: &Route,
     epoch: u64,
     claim_store: &ClaimStore,
@@ -33,7 +34,7 @@ pub async fn execute(
     } else {
         println!("[{}] Claim for epoch {} is INVALID! Challenging immediately", route.name, epoch);
         println!("[{}] Claimed: {:?}, Correct: {:?}", route.name, claimed_state_root, correct_state_root);
-        challenge::execute(route, epoch, claim_store).await?;
+        challenge::execute(config, route, epoch, claim_store).await?;
     }
 
     Ok(())

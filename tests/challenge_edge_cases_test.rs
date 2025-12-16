@@ -185,7 +185,7 @@ async fn test_start_verification_drops_task_when_claim_challenged() {
     indexer.scan_once().await;
 
     let state = task_store.load();
-    assert!(state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::VerifyClaim)), "VerifyClaim task should exist");
+    assert!(state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::ValidateClaim)), "ValidateClaim task should exist");
 
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), &schedule_path, &claims_path);
     dispatcher.process_pending().await;
