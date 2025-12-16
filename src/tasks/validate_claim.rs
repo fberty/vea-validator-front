@@ -25,7 +25,7 @@ pub async fn execute(
     }
 
     if claimed_state_root == correct_state_root {
-        println!("[{}] Claim for epoch {} is VALID, scheduling startVerification in 25h", route.name, epoch);
+        println!("[{}] Claim for epoch {} is VALID", route.name, epoch);
         task_store.add_task(Task {
             epoch,
             execute_after: current_timestamp + START_VERIFICATION_DELAY,

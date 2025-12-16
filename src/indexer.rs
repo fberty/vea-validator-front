@@ -249,6 +249,7 @@ impl EventIndexer {
 
         let claimer = Address::from_slice(&log.topics()[1].0[12..]);
         let epoch = U256::from_be_bytes(log.topics()[2].0).to::<u64>();
+        println!("[{}][Indexer] Claimed event for epoch {} at block {}", self.route.name, epoch, log.block_number.unwrap_or(0));
 
         if log.data().data.len() < 32 {
             return;
@@ -274,8 +275,6 @@ impl EventIndexer {
             challenger: Address::ZERO,
         });
 
-        println!("[{}][Indexer] Claimed event for epoch {} - scheduling ValidateClaim", self.route.name, epoch);
-
         self.task_store.add_task(Task {
             epoch,
             execute_after: now,
@@ -289,6 +288,7 @@ impl EventIndexer {
         }
 
         let epoch = U256::from_be_bytes(log.topics()[1].0).to::<u64>();
+        println!("[{}][Indexer] VerificationStarted event for epoch {} at block {}", self.route.name, epoch, log.block_number.unwrap_or(0));
 
         let mut state = self.task_store.load();
         state.tasks.retain(|t| !(t.epoch == epoch && matches!(t.kind, TaskKind::StartVerification)));
@@ -310,16 +310,13 @@ impl EventIndexer {
             .expect("Failed to get minChallengePeriod");
 
         let execute_after = (block_ts as u64) + min_challenge_period;
-        println!(
-            "[{}][Indexer] VerificationStarted for epoch {} - scheduled verifySnapshot at {}",
-            self.route.name, epoch, execute_after
-        );
 
         state.tasks.push(Task {
             epoch,
             execute_after,
             kind: TaskKind::VerifySnapshot,
         });
+        println!("[TaskStore] Scheduling VerifySnapshot for epoch {} at {}", epoch, execute_after);
         self.task_store.save(&state);
     }
 
@@ -330,6 +327,7 @@ impl EventIndexer {
 
         let epoch = U256::from_be_bytes(log.topics()[1].0).to::<u64>();
         let challenger = Address::from_slice(&log.topics()[2].0[12..]);
+        println!("[{}][Indexer] Challenged event for epoch {} at block {}", self.route.name, epoch, log.block_number.unwrap_or(0));
 
         self.claim_store.update(epoch, |c| {
             c.challenger = challenger;
@@ -349,6 +347,7 @@ impl EventIndexer {
         } else {
             return;
         };
+        println!("[{}][Indexer] Verified event for epoch {} at block {}", self.route.name, epoch, log.block_number.unwrap_or(0));
 
         let claim = self.claim_store.get(epoch);
 
@@ -364,7 +363,7 @@ impl EventIndexer {
             c.honest = honest.to_string();
         });
 
-        println!("[{}][Indexer] Verified event for epoch {} - {} was honest", self.route.name, epoch, honest);
+        println!("[{}][Indexer] Verified event for epoch {} - {} was honest, withdrawing deposit immediately", self.route.name, epoch, honest);
 
         tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await
             .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to withdraw deposit for epoch {}: {}", self.route.name, epoch, e));

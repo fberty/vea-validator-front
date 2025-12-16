@@ -59,6 +59,7 @@ impl TaskDispatcher {
         println!("[{}][Dispatcher] Processing {} ready tasks", self.route.name, ready.len());
 
         for task in ready {
+            println!("[{}][Dispatcher] Executing {} for epoch {}", self.route.name, task.kind.name(), task.epoch);
             let success = self.execute_task(&task, now).await;
             if success {
                 self.task_store.remove_task(&task);

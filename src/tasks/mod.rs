@@ -223,6 +223,7 @@ impl TaskStore {
     }
 
     pub fn add_task(&self, task: Task) {
+        println!("[TaskStore] Scheduling {} for epoch {} at {}", task.kind.name(), task.epoch, task.execute_after);
         let mut state = self.load();
         state.tasks.push(task);
         self.save(&state);
