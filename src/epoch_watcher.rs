@@ -31,8 +31,6 @@ impl EpochWatcher {
             let next_epoch_start = (current_epoch + 1) * epoch_period;
             let time_until_next_epoch = next_epoch_start.saturating_sub(now);
 
-            println!("[{}] Poll: epoch={}, time_until_next={}, last_before={:?}", self.route.name, current_epoch, time_until_next_epoch, last_before_epoch);
-
             if time_until_next_epoch <= BEFORE_EPOCH_BUFFER && last_before_epoch != Some(current_epoch) {
                 println!("[{}] Triggering saveSnapshot for epoch {}", self.route.name, current_epoch);
                 tasks::save_snapshot::execute(&self.route, current_epoch).await
