@@ -147,3 +147,79 @@ async fn test_weth_approval_skipped_if_exists() {
 }
 
 use std::str::FromStr;
+use vea_validator::tasks::{TaskStore, TaskKind};
+
+#[tokio::test]
+#[serial]
+async fn test_start_verification_drops_task_when_claim_challenged() {
+    let c = ValidatorConfig::from_env().unwrap();
+    let route = &c.build_routes()[0];
+    let outbox_provider = Arc::new(route.outbox_provider.clone());
+    restore_pristine().await;
+
+    let inbox = IVeaInboxArbToEth::new(route.inbox_address, route.inbox_provider.clone());
+    let outbox = IVeaOutboxArbToEth::new(route.outbox_address, outbox_provider.clone());
+    let epoch_period: u64 = inbox.epochPeriod().call().await.unwrap().try_into().unwrap();
+    let deposit = outbox.deposit().call().await.unwrap();
+
+    send_messages(route).await;
+    let epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
+    inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
+    let correct_root = inbox.snapshots(U256::from(epoch)).call().await.unwrap();
+
+    advance_time(epoch_period + 15 * 60 + 10).await;
+    let ts = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap().header.timestamp;
+    let target = (epoch + 1) * epoch_period + 15 * 60 + 10;
+    if target > ts { advance_time(target - ts).await; }
+
+    outbox.claim(U256::from(epoch), correct_root).value(deposit).send().await.unwrap().get_receipt().await.unwrap();
+
+    advance_time(15 * 60 + 10).await;
+
+    let test_dir = tempfile::tempdir().unwrap();
+    let schedule_path = test_dir.path().join("schedule.json");
+    let claims_path = test_dir.path().join("claims.json");
+    let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    let task_store = TaskStore::new(&schedule_path);
+
+    indexer.scan_once().await;
+
+    let state = task_store.load();
+    assert!(state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::VerifyClaim)), "VerifyClaim task should exist");
+
+    let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), &schedule_path, &claims_path);
+    dispatcher.process_pending().await;
+
+    let state = task_store.load();
+    assert!(state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::StartVerification)), "StartVerification task should be scheduled");
+
+    let claim_data = vea_validator::tasks::ClaimStore::new(&claims_path).get(epoch);
+    outbox.challenge(U256::from(epoch), vea_validator::contracts::Claim {
+        stateRoot: correct_root,
+        claimer: claim_data.claimer,
+        timestampClaimed: claim_data.timestamp_claimed,
+        timestampVerification: 0,
+        blocknumberVerification: 0,
+        honest: vea_validator::contracts::Party::None,
+        challenger: Address::ZERO,
+    }).value(deposit).send().await.unwrap().get_receipt().await.unwrap();
+
+    advance_time(25 * 3600 + 60).await;
+
+    dispatcher.process_pending().await;
+
+    let state = task_store.load();
+    assert!(state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::StartVerification)),
+        "Task should still exist after first retry (Invalid claim - stale data)");
+
+    indexer.scan_once().await;
+
+    let claim_data = vea_validator::tasks::ClaimStore::new(&claims_path).get(epoch);
+    assert_ne!(claim_data.challenger, Address::ZERO, "ClaimStore should be updated with challenger");
+
+    dispatcher.process_pending().await;
+
+    let state = task_store.load();
+    assert!(!state.tasks.iter().any(|t| t.epoch == epoch && matches!(t.kind, TaskKind::StartVerification)),
+        "Task should be dropped after retry with updated claim (Claim is challenged)");
+}
