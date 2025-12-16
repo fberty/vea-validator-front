@@ -63,10 +63,9 @@ impl EventIndexer {
             }
         };
 
-        let current_block_data = match self.route.inbox_provider.get_block_by_number(current_block.into()).await {
-            Ok(Some(b)) => b,
-            _ => return true,
-        };
+        let current_block_data = self.route.inbox_provider.get_block_by_number(current_block.into()).await
+            .expect("Failed to get inbox block data")
+            .expect("Inbox block not found");
         let now = current_block_data.header.timestamp;
 
         let state = self.task_store.load();
@@ -88,7 +87,7 @@ impl EventIndexer {
         match self.route.inbox_provider.get_logs(&filter).await {
             Ok(logs) => {
                 for log in logs {
-                    let block_ts = log.block_timestamp.unwrap_or(0);
+                    let block_ts = log.block_timestamp.expect("Log missing block_timestamp");
                     if block_ts > now.saturating_sub(FINALITY_BUFFER_SECS) {
                         continue;
                     }
@@ -125,10 +124,9 @@ impl EventIndexer {
             }
         };
 
-        let current_block_data = match self.route.outbox_provider.get_block_by_number(current_block.into()).await {
-            Ok(Some(b)) => b,
-            _ => return true,
-        };
+        let current_block_data = self.route.outbox_provider.get_block_by_number(current_block.into()).await
+            .expect("Failed to get outbox block data")
+            .expect("Outbox block not found");
         let now = current_block_data.header.timestamp;
 
         let state = self.task_store.load();
@@ -150,7 +148,7 @@ impl EventIndexer {
         match self.route.outbox_provider.get_logs(&filter).await {
             Ok(logs) => {
                 for log in logs {
-                    let block_ts = log.block_timestamp.unwrap_or(0);
+                    let block_ts = log.block_timestamp.expect("Log missing block_timestamp");
                     if block_ts > now.saturating_sub(FINALITY_BUFFER_SECS) {
                         continue;
                     }
@@ -241,7 +239,7 @@ impl EventIndexer {
         }
         let state_root = FixedBytes::<32>::from_slice(&log.data().data[0..32]);
 
-        let block_ts = log.block_timestamp.unwrap_or(0);
+        let block_ts = log.block_timestamp.expect("Log missing block_timestamp");
         let timestamp_claimed = block_ts as u32;
 
         let state = self.task_store.load();
@@ -283,21 +281,16 @@ impl EventIndexer {
             return;
         }
 
-        let block_ts = log.block_timestamp.unwrap_or(0) as u32;
-        let block_num = log.block_number.unwrap_or(0) as u32;
+        let block_ts = log.block_timestamp.expect("Log missing block_timestamp") as u32;
+        let block_num = log.block_number.expect("Log missing block_number") as u32;
 
         self.claim_store.update(epoch, |c| {
             c.timestamp_verification = block_ts;
             c.blocknumber_verification = block_num;
         });
 
-        let min_challenge_period = match self.get_min_challenge_period().await {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get minChallengePeriod: {}", self.route.name, e);
-                return;
-            }
-        };
+        let min_challenge_period = self.get_min_challenge_period().await
+            .expect("Failed to get minChallengePeriod");
 
         let execute_after = (block_ts as u64) + min_challenge_period;
         println!(
@@ -326,9 +319,8 @@ impl EventIndexer {
 
         println!("[{}][Indexer] Challenged event for epoch {} - sending snapshot immediately", self.route.name, epoch);
 
-        if let Err(e) = send_snapshot::execute(&self.route, epoch, &self.claim_store).await {
-            eprintln!("[{}][Indexer] Failed to send snapshot for epoch {}: {}", self.route.name, epoch, e);
-        }
+        send_snapshot::execute(&self.route, epoch, &self.claim_store).await
+            .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to send snapshot for epoch {}: {}", self.route.name, epoch, e));
     }
 
     async fn handle_verified_event(&self, log: &alloy::rpc::types::Log) {
@@ -356,9 +348,8 @@ impl EventIndexer {
 
         println!("[{}][Indexer] Verified event for epoch {} - {} was honest", self.route.name, epoch, honest);
 
-        if let Err(e) = tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await {
-            eprintln!("[{}][Indexer] Failed to withdraw deposit for epoch {}: {}", self.route.name, epoch, e);
-        }
+        tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await
+            .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to withdraw deposit for epoch {}: {}", self.route.name, epoch, e));
     }
 
     fn parse_epoch_from_snapshot_sent(&self, log: &alloy::rpc::types::Log) -> Option<u64> {
@@ -373,7 +364,9 @@ impl EventIndexer {
         tx_hash: FixedBytes<32>,
         epoch: u64,
     ) -> Option<(u64, u64, U256, Address, Address, u64, u64, u64, U256, Bytes)> {
-        let receipt = self.route.inbox_provider.get_transaction_receipt(tx_hash).await.ok()??;
+        let receipt = self.route.inbox_provider.get_transaction_receipt(tx_hash).await
+            .expect("Failed to get transaction receipt")
+            .expect("Transaction receipt not found");
 
         let l2_to_l1_tx_sig = alloy::primitives::keccak256(
             "L2ToL1Tx(address,address,uint256,uint256,uint256,uint256,uint256,uint256,bytes)"
@@ -416,11 +409,11 @@ impl EventIndexer {
                 Bytes::new()
             };
 
-            let block_number = receipt.block_number.unwrap_or(0);
-            let block_timestamp = match self.route.inbox_provider.get_block_by_number(block_number.into()).await {
-                Ok(Some(block)) => block.header.timestamp,
-                _ => 0,
-            };
+            let block_number = receipt.block_number.expect("Receipt missing block_number");
+            let block_timestamp = self.route.inbox_provider.get_block_by_number(block_number.into()).await
+                .expect("Failed to get block by number")
+                .expect("Block not found")
+                .header.timestamp;
 
             return Some((
                 epoch,

@@ -167,8 +167,9 @@ impl ClaimStore {
 
     fn load_all(&self) -> Vec<ClaimData> {
         match fs::read_to_string(&self.path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-            Err(_) => Vec::new(),
+            Ok(contents) => serde_json::from_str(&contents).expect("Failed to parse claims file - data corrupted"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => panic!("Failed to read claims file: {}", e),
         }
     }
 
@@ -250,8 +251,9 @@ impl TaskStore {
 
     pub fn load(&self) -> RouteState {
         match fs::read_to_string(&self.path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-            Err(_) => RouteState::default(),
+            Ok(contents) => serde_json::from_str(&contents).expect("Failed to parse schedule file - data corrupted"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => RouteState::default(),
+            Err(e) => panic!("Failed to read schedule file: {}", e),
         }
     }
 

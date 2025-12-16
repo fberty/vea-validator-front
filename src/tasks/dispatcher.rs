@@ -40,10 +40,10 @@ impl TaskDispatcher {
     pub async fn process_pending(&self) {
         let state = self.task_store.load();
 
-        let now = match self.route.outbox_provider.get_block_by_number(Default::default()).await {
-            Ok(Some(block)) => block.header.timestamp,
-            _ => return,
-        };
+        let now = self.route.outbox_provider.get_block_by_number(Default::default()).await
+            .expect("Failed to get latest block")
+            .expect("Latest block not found")
+            .header.timestamp;
 
         let ready: Vec<Task> = state
             .tasks
