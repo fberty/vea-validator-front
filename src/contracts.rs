@@ -63,6 +63,7 @@ sol! {
         function deposit() external view returns (uint256);
         function claimHashes(uint256 epoch) external view returns (bytes32);
         function epochPeriod() external view returns (uint256);
+        function stateRoot() external view returns (bytes32);
     }
 
     #[derive(Debug)]

@@ -195,6 +195,11 @@ impl ClaimStore {
         claims.retain(|c| c.epoch != epoch);
         self.save_all(&claims);
     }
+
+    pub fn has_state_root_in_recent_claims(&self, state_root: FixedBytes<32>, since_timestamp: u32) -> bool {
+        let claims = self.load_all();
+        claims.iter().any(|c| c.state_root == state_root && c.timestamp_claimed >= since_timestamp)
+    }
 }
 
 pub struct TaskStore {

@@ -28,7 +28,8 @@ async fn test_save_snapshot() {
     let epoch: u64 = inbox.epochNow().call().await.unwrap().try_into().unwrap();
     assert_eq!(inbox.snapshots(U256::from(epoch)).call().await.unwrap(), FixedBytes::<32>::ZERO);
 
-    let watcher = EpochWatcher::new(route.clone(), true);
+    let test_dir = tempfile::tempdir().unwrap();
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -69,7 +70,8 @@ async fn test_claim() {
 
     assert_eq!(outbox.claimHashes(U256::from(epoch)).call().await.unwrap(), FixedBytes::<32>::ZERO);
 
-    let watcher = EpochWatcher::new(route.clone(), true);
+    let test_dir = tempfile::tempdir().unwrap();
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -98,7 +100,8 @@ async fn test_no_duplicate_snapshot() {
     inbox.saveSnapshot().send().await.unwrap().get_receipt().await.unwrap();
     let snapshot_before = inbox.snapshots(U256::from(epoch)).call().await.unwrap();
 
-    let watcher = EpochWatcher::new(route.clone(), true);
+    let test_dir = tempfile::tempdir().unwrap();
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -138,6 +141,9 @@ async fn test_claim_race_condition() {
     let deposit = outbox.deposit().call().await.unwrap();
     outbox.claim(U256::from(epoch), snapshot).value(deposit).send().await.unwrap().get_receipt().await.unwrap();
 
-    let result = tasks::claim::execute(route, epoch).await;
+    let test_dir = tempfile::tempdir().unwrap();
+    let claim_store = tasks::ClaimStore::new(test_dir.path().join("claims.json"));
+    let ts = outbox_provider.get_block_by_number(Default::default()).await.unwrap().unwrap().header.timestamp;
+    let result = tasks::claim::execute(route, epoch, &claim_store, ts).await;
     assert!(result.is_ok(), "Validator should handle existing claim gracefully");
 }

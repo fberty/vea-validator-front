@@ -74,7 +74,7 @@ impl TaskDispatcher {
                 tasks::save_snapshot::execute(&self.route, epoch).await.is_ok()
             }
             TaskKind::Claim { .. } => {
-                tasks::claim::execute(&self.route, epoch).await.is_ok()
+                tasks::claim::execute(&self.route, epoch, &self.claim_store, current_timestamp).await.is_ok()
             }
             TaskKind::ValidateClaim => {
                 tasks::validate_claim::execute(

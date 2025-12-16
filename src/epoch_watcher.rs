@@ -1,8 +1,10 @@
+use std::path::Path;
 use alloy::providers::Provider;
 use tokio::time::{sleep, Duration};
 
 use crate::config::Route;
 use crate::tasks;
+use crate::tasks::ClaimStore;
 
 const BEFORE_EPOCH_BUFFER: u64 = 60;
 const AFTER_EPOCH_BUFFER: u64 = 15 * 60;
@@ -10,11 +12,12 @@ const AFTER_EPOCH_BUFFER: u64 = 15 * 60;
 pub struct EpochWatcher {
     route: Route,
     make_claims: bool,
+    claim_store: ClaimStore,
 }
 
 impl EpochWatcher {
-    pub fn new(route: Route, make_claims: bool) -> Self {
-        Self { route, make_claims }
+    pub fn new(route: Route, make_claims: bool, claims_path: impl AsRef<Path>) -> Self {
+        Self { route, make_claims, claim_store: ClaimStore::new(claims_path.as_ref()) }
     }
 
     async fn get_current_timestamp(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
@@ -44,7 +47,7 @@ impl EpochWatcher {
                     let prev_epoch = current_epoch - 1;
                     if last_after_epoch != Some(prev_epoch) {
                         println!("[{}] Triggering claim for epoch {}", self.route.name, prev_epoch);
-                        tasks::claim::execute(&self.route, prev_epoch).await
+                        tasks::claim::execute(&self.route, prev_epoch, &self.claim_store, now).await
                             .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to handle claim for epoch {}: {}", self.route.name, prev_epoch, e));
                         last_after_epoch = Some(prev_epoch);
                     }
