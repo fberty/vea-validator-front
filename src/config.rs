@@ -1,13 +1,18 @@
 use alloy::primitives::Address;
 use alloy::network::{EthereumWallet, Ethereum};
 use alloy::providers::{ProviderBuilder, DynProvider};
+use alloy::rpc::client::RpcClient;
+use alloy::transports::http::Http;
+use alloy::transports::layers::FallbackLayer;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::collections::HashMap;
+use tower::ServiceBuilder;
 
 #[derive(Debug, Clone)]
 pub struct ChainInfo {
     pub name: String,
-    pub rpc_url: String,
+    pub rpc_urls: Vec<String>,
     pub deposit_token: Option<Address>,
     pub avg_block_millis: u32,
 }
@@ -38,26 +43,41 @@ pub struct ValidatorConfig {
     pub make_claims: bool,
 }
 impl ValidatorConfig {
-    pub fn build_routes(&self) -> Vec<Route> {
-        let arb_rpc = &self.chains.get(&42161).expect("Arbitrum").rpc_url;
-        let eth_rpc = &self.chains.get(&1).expect("Ethereum").rpc_url;
-        let gnosis_rpc = &self.chains.get(&100).expect("Gnosis").rpc_url;
+    fn build_provider(&self, chain_id: u64) -> DynProvider<Ethereum> {
+        let chain = self.chains.get(&chain_id).expect("Chain not found");
+        let urls = &chain.rpc_urls;
 
-        let arb_provider = DynProvider::new(
+        if urls.len() == 1 {
+            return DynProvider::new(
+                ProviderBuilder::new()
+                    .wallet(self.wallet.clone())
+                    .connect_http(urls[0].parse().expect("Invalid RPC URL"))
+            );
+        }
+
+        let fallback = FallbackLayer::default()
+            .with_active_transport_count(NonZeroUsize::new(1).unwrap());
+
+        let transports: Vec<_> = urls.iter()
+            .map(|url| Http::new(url.parse().expect("Invalid RPC URL")))
+            .collect();
+
+        let transport = ServiceBuilder::new()
+            .layer(fallback)
+            .service(transports);
+
+        let client = RpcClient::builder().transport(transport, false);
+        DynProvider::new(
             ProviderBuilder::new()
                 .wallet(self.wallet.clone())
-                .connect_http(arb_rpc.parse().expect("Invalid Arbitrum RPC URL"))
-        );
-        let eth_provider = DynProvider::new(
-            ProviderBuilder::new()
-                .wallet(self.wallet.clone())
-                .connect_http(eth_rpc.parse().expect("Invalid Ethereum RPC URL"))
-        );
-        let gnosis_provider = DynProvider::new(
-            ProviderBuilder::new()
-                .wallet(self.wallet.clone())
-                .connect_http(gnosis_rpc.parse().expect("Invalid Gnosis RPC URL"))
-        );
+                .connect_client(client)
+        )
+    }
+
+    pub fn build_routes(&self) -> Vec<Route> {
+        let arb_provider = self.build_provider(42161);
+        let eth_provider = self.build_provider(1);
+        let gnosis_provider = self.build_provider(100);
 
         vec![
             Route {
@@ -85,15 +105,21 @@ impl ValidatorConfig {
         ]
     }
 
+    fn parse_rpc_urls(env_var: &str) -> Vec<String> {
+        std::env::var(env_var)
+            .expect(&format!("{} must be set", env_var))
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         dotenv::dotenv().ok();
 
-        let arbitrum_rpc = std::env::var("ARBITRUM_RPC_URL")
-            .expect("ARBITRUM_RPC_URL must be set");
-        let ethereum_rpc = std::env::var("ETHEREUM_RPC_URL")
-            .expect("ETHEREUM_RPC_URL must be set");
-        let gnosis_rpc = std::env::var("GNOSIS_RPC_URL")
-            .expect("GNOSIS_RPC_URL must be set");
+        let arbitrum_rpcs = Self::parse_rpc_urls("ARBITRUM_RPC_URL");
+        let ethereum_rpcs = Self::parse_rpc_urls("ETHEREUM_RPC_URL");
+        let gnosis_rpcs = Self::parse_rpc_urls("GNOSIS_RPC_URL");
         let weth_gnosis = Address::from_str(
             &std::env::var("WETH_GNOSIS")
                 .expect("WETH_GNOSIS must be set")
@@ -111,19 +137,19 @@ impl ValidatorConfig {
         let mut chains = HashMap::new();
         chains.insert(42161, ChainInfo {
             name: "Arbitrum".to_string(),
-            rpc_url: arbitrum_rpc,
+            rpc_urls: arbitrum_rpcs,
             deposit_token: None,
             avg_block_millis: 250,
         });
         chains.insert(1, ChainInfo {
             name: "Ethereum".to_string(),
-            rpc_url: ethereum_rpc,
+            rpc_urls: ethereum_rpcs,
             deposit_token: None,
             avg_block_millis: 12000,
         });
         chains.insert(100, ChainInfo {
             name: "Gnosis".to_string(),
-            rpc_url: gnosis_rpc,
+            rpc_urls: gnosis_rpcs,
             deposit_token: Some(weth_gnosis),
             avg_block_millis: 5000,
         });
