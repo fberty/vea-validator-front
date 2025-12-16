@@ -15,6 +15,6 @@ pub async fn execute(
         outbox.verifySnapshot(U256::from(epoch), claim).send().await,
         "verifySnapshot",
         route.name,
-        &["already"],
+        &["already", "challenged"],
     ).await
 }

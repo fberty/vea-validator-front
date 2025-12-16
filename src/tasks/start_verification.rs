@@ -15,6 +15,6 @@ pub async fn execute(
         outbox.startVerification(U256::from(epoch), claim).send().await,
         "startVerification",
         route.name,
-        &["already"],
+        &["already", "challenged"],
     ).await
 }
