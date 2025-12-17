@@ -3,6 +3,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use std::path::PathBuf;
 use std::cmp::min;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::{sleep, Duration};
 
 use crate::config::Route;
@@ -34,6 +35,8 @@ pub struct EventIndexer {
     route: Route,
     task_store: TaskStore,
     claim_store: ClaimStore,
+    inbox_catchup_start: AtomicU64,
+    outbox_catchup_start: AtomicU64,
 }
 
 impl EventIndexer {
@@ -46,6 +49,8 @@ impl EventIndexer {
             route,
             task_store: TaskStore::new(schedule_path),
             claim_store: ClaimStore::new(claims_path),
+            inbox_catchup_start: AtomicU64::new(0),
+            outbox_catchup_start: AtomicU64::new(0),
         }
     }
 
@@ -87,7 +92,12 @@ impl EventIndexer {
         let from_block = state.inbox_last_block.unwrap_or_else(|| current_block.saturating_sub(ten_days_blocks));
 
         if from_block >= current_block {
+            self.inbox_catchup_start.store(0, Ordering::Relaxed);
             return true;
+        }
+
+        if self.inbox_catchup_start.load(Ordering::Relaxed) == 0 {
+            self.inbox_catchup_start.store(from_block, Ordering::Relaxed);
         }
 
         let to_block = min(from_block + CHUNK_SIZE, current_block);
@@ -108,11 +118,20 @@ impl EventIndexer {
                     self.handle_snapshot_sent(&log).await;
                 }
                 self.task_store.update_inbox_block(to_block);
+                let start = self.inbox_catchup_start.load(Ordering::Relaxed);
+                let start = if start == 0 { from_block } else { start };
+                let total = current_block.saturating_sub(start);
+                let done = to_block.saturating_sub(start);
+                let pct = if total > 0 { (done * 100) / total } else { 100 };
                 println!(
-                    "[{}][Indexer] Inbox scanned blocks {}-{}",
-                    self.route.name, from_block, to_block
+                    "[{}][Indexer] Inbox {}-{} ({}% synced)",
+                    self.route.name, from_block, to_block, pct
                 );
-                to_block >= current_block
+                let is_done = to_block >= current_block;
+                if is_done {
+                    self.inbox_catchup_start.store(0, Ordering::Relaxed);
+                }
+                is_done
             }
             Err(e) => {
                 eprintln!(
@@ -148,7 +167,12 @@ impl EventIndexer {
         let from_block = state.outbox_last_block.unwrap_or_else(|| current_block.saturating_sub(ten_days_blocks));
 
         if from_block >= current_block {
+            self.outbox_catchup_start.store(0, Ordering::Relaxed);
             return true;
+        }
+
+        if self.outbox_catchup_start.load(Ordering::Relaxed) == 0 {
+            self.outbox_catchup_start.store(from_block, Ordering::Relaxed);
         }
 
         let to_block = min(from_block + CHUNK_SIZE, current_block);
@@ -183,11 +207,20 @@ impl EventIndexer {
                     }
                 }
                 self.task_store.update_outbox_block(to_block);
+                let start = self.outbox_catchup_start.load(Ordering::Relaxed);
+                let start = if start == 0 { from_block } else { start };
+                let total = current_block.saturating_sub(start);
+                let done = to_block.saturating_sub(start);
+                let pct = if total > 0 { (done * 100) / total } else { 100 };
                 println!(
-                    "[{}][Indexer] Outbox scanned blocks {}-{}",
-                    self.route.name, from_block, to_block
+                    "[{}][Indexer] Outbox {}-{} ({}% synced)",
+                    self.route.name, from_block, to_block, pct
                 );
-                to_block >= current_block
+                let is_done = to_block >= current_block;
+                if is_done {
+                    self.outbox_catchup_start.store(0, Ordering::Relaxed);
+                }
+                is_done
             }
             Err(e) => {
                 eprintln!(
