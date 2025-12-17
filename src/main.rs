@@ -10,8 +10,8 @@ use vea_validator::{
 
 async fn run_route(config: ValidatorConfig, route: Route, epoch_period: u64) {
     let name = route.name.to_lowercase().replace("_", "-");
-    let schedule_path = format!("schedules/{}.json", name);
-    let claims_path = format!("claims/{}.json", name);
+    let schedule_path = format!("data/schedules/{}.json", name);
+    let claims_path = format!("data/claims/{}.json", name);
 
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route.name, route.inbox_address, route.outbox_address);
 

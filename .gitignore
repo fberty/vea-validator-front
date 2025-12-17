@@ -31,9 +31,8 @@ Thumbs.db
 # Test devnet snapshot
 .devnet-snapshot
 
-# Scheduler persistence files
-schedules/
-claims/
+# Validator data (claims + schedules)
+data/
 
 # Claude IDE
 .claude/
