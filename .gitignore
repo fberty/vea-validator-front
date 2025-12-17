@@ -33,6 +33,7 @@ Thumbs.db
 
 # Scheduler persistence files
 schedules/
+claims/
 
 # Claude IDE
 .claude/

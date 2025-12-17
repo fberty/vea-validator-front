@@ -15,9 +15,9 @@ use alloy::providers::DynProvider;
 
 enum ScanTarget { Inbox, Outbox }
 
-const CHUNK_SIZE: u64 = 500;
+const CHUNK_SIZE: u64 = 2000;
 const FINALITY_BUFFER_SECS: u64 = 15 * 60;
-const CATCHUP_SLEEP: Duration = Duration::from_secs(5);
+const CATCHUP_SLEEP: Duration = Duration::from_secs(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(5 * 60);
 const RELAY_DELAY: u64 = 7 * 24 * 3600 + 3600;
 const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
