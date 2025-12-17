@@ -82,7 +82,6 @@ impl TaskDispatcher {
             }
             TaskKind::ValidateClaim => {
                 tasks::validate_claim::execute(
-                    &self.config,
                     &self.route,
                     epoch,
                     &self.claim_store,
@@ -91,7 +90,14 @@ impl TaskDispatcher {
                 ).await.is_ok()
             }
             TaskKind::Challenge => {
-                tasks::challenge::execute(&self.config, &self.route, epoch, &self.claim_store).await.is_ok()
+                match tasks::challenge::execute(&self.config, &self.route, epoch, &self.claim_store).await {
+                    Ok(_) => true,
+                    Err(e) if e.to_string() == "Insufficient funds" => {
+                        self.task_store.reschedule_task(task, current_timestamp + 15 * 60);
+                        true
+                    }
+                    Err(_) => false,
+                }
             }
             TaskKind::SendSnapshot => {
                 tasks::send_snapshot::execute(&self.route, epoch, &self.claim_store).await.is_ok()

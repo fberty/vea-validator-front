@@ -51,6 +51,7 @@ async fn test_send_snapshot_after_challenge() {
 
     indexer.scan_once().await;
     dispatcher.process_pending().await;
+    dispatcher.process_pending().await;
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
@@ -237,6 +238,7 @@ async fn test_send_snapshot_gnosis() {
 
     indexer.scan_once().await;
     dispatcher.process_pending().await;
+    dispatcher.process_pending().await;
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
@@ -349,6 +351,7 @@ async fn test_challenger_wins_bad_claim() {
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
     dispatcher.process_pending().await;
 
     let challenged_sig = alloy::primitives::keccak256("Challenged(uint256,address)");

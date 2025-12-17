@@ -50,6 +50,7 @@ async fn test_challenge_bad_claim() {
 
     indexer.scan_once().await;
     dispatcher.process_pending().await;
+    dispatcher.process_pending().await;
 
     let sig = alloy::primitives::keccak256("Challenged(uint256,address)");
     let filter = alloy::rpc::types::Filter::new().address(route.outbox_address).event_signature(sig).from_block(0u64);
@@ -103,6 +104,7 @@ async fn test_challenge_bad_claim_gnosis() {
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
     dispatcher.process_pending().await;
 
     let sig = alloy::primitives::keccak256("Challenged(uint256,address)");

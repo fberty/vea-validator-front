@@ -253,6 +253,18 @@ impl TaskStore {
         self.save(&state);
     }
 
+    pub fn reschedule_task(&self, task: &Task, execute_after: u64) {
+        println!("[{}][TaskStore] Rescheduling {} for epoch {} to {}", self.label(), task.kind.name(), task.epoch, execute_after);
+        let mut state = self.load();
+        for t in &mut state.tasks {
+            if t.epoch == task.epoch && t.kind.name() == task.kind.name() {
+                t.execute_after = execute_after;
+                break;
+            }
+        }
+        self.save(&state);
+    }
+
     pub fn update_inbox_block(&self, block: u64) {
         let mut state = self.load();
         state.inbox_last_block = Some(block);
