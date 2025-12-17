@@ -13,6 +13,8 @@ use crate::tasks::{self, Task, TaskKind, TaskStore, ClaimStore, ClaimData, send_
 use alloy::network::Ethereum;
 use alloy::providers::DynProvider;
 
+enum ScanTarget { Inbox, Outbox }
+
 const CHUNK_SIZE: u64 = 500;
 const FINALITY_BUFFER_SECS: u64 = 15 * 60;
 const CATCHUP_SLEEP: Duration = Duration::from_secs(5);
@@ -127,173 +129,118 @@ impl EventIndexer {
     }
 
     pub async fn scan_once(&self) -> bool {
-        let inbox_done = self.scan_inbox().await;
-        let outbox_done = self.scan_outbox().await;
+        let inbox_done = self.scan_chain(ScanTarget::Inbox).await;
+        let outbox_done = self.scan_chain(ScanTarget::Outbox).await;
         inbox_done && outbox_done
     }
 
-    async fn scan_inbox(&self) -> bool {
-        let snapshot_sent_sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
+    async fn scan_chain(&self, target: ScanTarget) -> bool {
+        use ScanTarget::*;
 
-        let current_block = match self.route.inbox_provider.get_block_number().await {
+        let (provider, address, label, catchup) = match target {
+            Inbox => (&self.route.inbox_provider, self.route.inbox_address, "Inbox", &self.inbox_catchup_start),
+            Outbox => (&self.route.outbox_provider, self.route.outbox_address, "Outbox", &self.outbox_catchup_start),
+        };
+
+        let current_block = match provider.get_block_number().await {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get inbox block number: {}", self.route.name, e);
+                eprintln!("[{}][Indexer] Failed to get {} block number: {}", self.route.name, label, e);
                 return true;
             }
         };
 
-        let current_block_data = self.route.inbox_provider.get_block_by_number(current_block.into()).await
-            .expect("Failed to get inbox block data")
-            .expect("Inbox block not found");
+        let current_block_data = provider.get_block_by_number(current_block.into()).await
+            .expect("Failed to get block data")
+            .expect("Block not found");
         let now = current_block_data.header.timestamp;
 
         let state = self.task_store.load();
-        let from_block = state.inbox_last_block.expect("inbox_last_block not set - call initialize() first");
+        let from_block = match target {
+            Inbox => state.inbox_last_block.expect("inbox_last_block not set"),
+            Outbox => state.outbox_last_block.expect("outbox_last_block not set"),
+        };
 
         let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
-        let target_block = find_block_by_timestamp(&self.route.inbox_provider, target_ts).await;
+        let target_block = find_block_by_timestamp(provider, target_ts).await;
 
         if from_block >= target_block {
-            self.inbox_catchup_start.store(0, Ordering::Relaxed);
+            catchup.store(0, Ordering::Relaxed);
             return true;
         }
 
-        if self.inbox_catchup_start.load(Ordering::Relaxed) == 0 {
-            self.inbox_catchup_start.store(from_block, Ordering::Relaxed);
+        if catchup.load(Ordering::Relaxed) == 0 {
+            catchup.store(from_block, Ordering::Relaxed);
         }
 
         let to_block = min(from_block + CHUNK_SIZE, target_block);
 
+        let event_sigs: Vec<FixedBytes<32>> = match target {
+            Inbox => vec![alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)")],
+            Outbox => vec![
+                alloy::primitives::keccak256("Claimed(address,uint256,bytes32)"),
+                alloy::primitives::keccak256("VerificationStarted(uint256)"),
+                alloy::primitives::keccak256("Challenged(uint256,address)"),
+                alloy::primitives::keccak256("Verified(uint256)"),
+            ],
+        };
+
         let filter = Filter::new()
-            .address(self.route.inbox_address)
-            .event_signature(snapshot_sent_sig)
+            .address(address)
+            .event_signature(event_sigs)
             .from_block(from_block)
             .to_block(to_block);
 
-        match self.route.inbox_provider.get_logs(&filter).await {
+        match provider.get_logs(&filter).await {
             Ok(logs) => {
                 for log in logs {
-                    let block_ts = get_log_timestamp(&log, &self.route.inbox_provider).await;
+                    let block_ts = get_log_timestamp(&log, provider).await;
                     if block_ts > now.saturating_sub(FINALITY_BUFFER_SECS) {
                         continue;
                     }
-                    self.handle_snapshot_sent(&log).await;
+                    match target {
+                        Inbox => self.handle_snapshot_sent(&log).await,
+                        Outbox => self.dispatch_outbox_event(&log, now).await,
+                    }
                 }
-                self.task_store.update_inbox_block(to_block);
-                let start = self.inbox_catchup_start.load(Ordering::Relaxed);
+
+                match target {
+                    Inbox => self.task_store.update_inbox_block(to_block),
+                    Outbox => self.task_store.update_outbox_block(to_block),
+                }
+
+                let start = catchup.load(Ordering::Relaxed);
                 let start = if start == 0 { from_block } else { start };
                 let total = target_block.saturating_sub(start);
                 let done = to_block.saturating_sub(start);
                 let pct = if total > 0 { (done * 100) / total } else { 100 };
-                println!(
-                    "[{}][Indexer] Inbox {}-{} ({}% synced)",
-                    self.route.name, from_block, to_block, pct
-                );
+                println!("[{}][Indexer] {} {}-{} ({}% synced)", self.route.name, label, from_block, to_block, pct);
+
                 let is_done = to_block >= target_block;
-                if is_done {
-                    self.inbox_catchup_start.store(0, Ordering::Relaxed);
-                }
+                if is_done { catchup.store(0, Ordering::Relaxed); }
                 is_done
             }
             Err(e) => {
-                eprintln!(
-                    "[{}][Indexer] Failed to query inbox logs {}-{}: {}",
-                    self.route.name, from_block, to_block, e
-                );
+                eprintln!("[{}][Indexer] Failed to query {} logs {}-{}: {}", self.route.name, label, from_block, to_block, e);
                 true
             }
         }
     }
 
-    async fn scan_outbox(&self) -> bool {
-        let claimed_sig = alloy::primitives::keccak256("Claimed(address,uint256,bytes32)");
-        let verification_started_sig = alloy::primitives::keccak256("VerificationStarted(uint256)");
-        let challenged_sig = alloy::primitives::keccak256("Challenged(uint256,address)");
-        let verified_sig = alloy::primitives::keccak256("Verified(uint256)");
-
-        let current_block = match self.route.outbox_provider.get_block_number().await {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("[{}][Indexer] Failed to get outbox block number: {}", self.route.name, e);
-                return true;
-            }
+    async fn dispatch_outbox_event(&self, log: &alloy::rpc::types::Log, now: u64) {
+        let topic0 = match log.topics().first() {
+            Some(t) => *t,
+            None => return,
         };
 
-        let current_block_data = self.route.outbox_provider.get_block_by_number(current_block.into()).await
-            .expect("Failed to get outbox block data")
-            .expect("Outbox block not found");
-        let now = current_block_data.header.timestamp;
-
-        let state = self.task_store.load();
-        let from_block = state.outbox_last_block.expect("outbox_last_block not set - call initialize() first");
-
-        let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
-        let target_block = find_block_by_timestamp(&self.route.outbox_provider, target_ts).await;
-
-        if from_block >= target_block {
-            self.outbox_catchup_start.store(0, Ordering::Relaxed);
-            return true;
-        }
-
-        if self.outbox_catchup_start.load(Ordering::Relaxed) == 0 {
-            self.outbox_catchup_start.store(from_block, Ordering::Relaxed);
-        }
-
-        let to_block = min(from_block + CHUNK_SIZE, target_block);
-
-        let filter = Filter::new()
-            .address(self.route.outbox_address)
-            .event_signature(vec![claimed_sig, verification_started_sig, challenged_sig, verified_sig])
-            .from_block(from_block)
-            .to_block(to_block);
-
-        match self.route.outbox_provider.get_logs(&filter).await {
-            Ok(logs) => {
-                for log in logs {
-                    let block_ts = get_log_timestamp(&log, &self.route.outbox_provider).await;
-                    if block_ts > now.saturating_sub(FINALITY_BUFFER_SECS) {
-                        continue;
-                    }
-
-                    let topic0 = match log.topics().first() {
-                        Some(t) => *t,
-                        None => continue,
-                    };
-
-                    if topic0 == claimed_sig {
-                        self.handle_claimed_event(&log, now).await;
-                    } else if topic0 == verification_started_sig {
-                        self.handle_verification_started_event(&log).await;
-                    } else if topic0 == challenged_sig {
-                        self.handle_challenged_event(&log).await;
-                    } else if topic0 == verified_sig {
-                        self.handle_verified_event(&log).await;
-                    }
-                }
-                self.task_store.update_outbox_block(to_block);
-                let start = self.outbox_catchup_start.load(Ordering::Relaxed);
-                let start = if start == 0 { from_block } else { start };
-                let total = target_block.saturating_sub(start);
-                let done = to_block.saturating_sub(start);
-                let pct = if total > 0 { (done * 100) / total } else { 100 };
-                println!(
-                    "[{}][Indexer] Outbox {}-{} ({}% synced)",
-                    self.route.name, from_block, to_block, pct
-                );
-                let is_done = to_block >= target_block;
-                if is_done {
-                    self.outbox_catchup_start.store(0, Ordering::Relaxed);
-                }
-                is_done
-            }
-            Err(e) => {
-                eprintln!(
-                    "[{}][Indexer] Failed to query outbox logs {}-{}: {}",
-                    self.route.name, from_block, to_block, e
-                );
-                true
-            }
+        if topic0 == alloy::primitives::keccak256("Claimed(address,uint256,bytes32)") {
+            self.handle_claimed_event(log, now).await;
+        } else if topic0 == alloy::primitives::keccak256("VerificationStarted(uint256)") {
+            self.handle_verification_started_event(log).await;
+        } else if topic0 == alloy::primitives::keccak256("Challenged(uint256,address)") {
+            self.handle_challenged_event(log).await;
+        } else if topic0 == alloy::primitives::keccak256("Verified(uint256)") {
+            self.handle_verified_event(log).await;
         }
     }
 
