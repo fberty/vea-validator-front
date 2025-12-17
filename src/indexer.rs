@@ -20,8 +20,8 @@ const FINALITY_BUFFER_SECS: u64 = 15 * 60;
 const CATCHUP_SLEEP: Duration = Duration::from_secs(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(5 * 60);
 const RELAY_DELAY: u64 = 7 * 24 * 3600 + 3600;
-// const SYNC_LOOKBACK_SECS: u64 = 8 * 24 * 3600 + 12 * 3600;
-const SYNC_LOOKBACK_SECS: u64 = 12 * 3600;
+const SYNC_LOOKBACK_SECS: u64 = 8 * 24 * 3600 + 12 * 3600;
+// const SYNC_LOOKBACK_SECS: u64 = 12 * 3600; for testing...
 const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
 
 async fn get_log_timestamp(log: &alloy::rpc::types::Log, provider: &DynProvider<Ethereum>) -> u64 {
