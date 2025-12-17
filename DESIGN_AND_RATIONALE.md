@@ -119,3 +119,20 @@ The indexer only processes `SnapshotSent` events from transactions it sent itsel
 **How it works:** When the validator sees a `Challenged` event, it calls `sendSnapshot` itself. By only indexing our own `SnapshotSent` events, we guarantee we're relaying messages we know are correct.
 
 **Alternative approach (not implemented):** Parse the `L2ToL1Tx` calldata, compare the embedded `Claim` against our `ClaimStore`, verify no prior `SnapshotSent` exists for that epoch, then schedule the relay. This would let us piggyback on other validators' snapshots but adds complexity. The `isSpent` check in `execute_relay` would then serve as the final guard against duplicate relays. For v1, self-filtering is simpler and sufficient.
+
+## Route-Specific Logic
+
+Two types of route-specific branching:
+
+**Deposit logic** (`weth_address.is_some()`): Used when the difference is ETH vs WETH deposits.
+
+| Task | WETH route | ETH route |
+|------|------------|-----------|
+| `claim` | no `.value(deposit)` | `.value(deposit)` |
+| `challenge` | check WETH balance, no `.value(deposit)` | check ETH balance, `.value(deposit)` |
+
+**Contract signatures** (`match route.name`): Used when contracts have different function signatures.
+
+| Task | ARB_TO_ETH | ARB_TO_GNOSIS |
+|------|------------|---------------|
+| `send_snapshot` | `sendSnapshot(epoch, claim)` | `sendSnapshot(epoch, gas_limit, claim)` |

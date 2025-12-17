@@ -29,6 +29,7 @@ sol! {
         function epochNow() external view returns (uint256);
         function saveSnapshot() external;
         function sendMessage(address to, bytes calldata data) external returns (uint64);
+        function count() external view returns (uint64);
     }
 
     #[derive(Debug)]

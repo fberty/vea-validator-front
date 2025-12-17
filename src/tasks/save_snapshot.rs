@@ -1,14 +1,14 @@
 use alloy::primitives::U256;
 use alloy::providers::Provider;
 use crate::config::Route;
-use crate::contracts::IVeaInboxArbToEth;
+use crate::contracts::IVeaInbox;
 use crate::tasks::send_tx;
 
 pub async fn execute(
     route: &Route,
     epoch: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let inbox = IVeaInboxArbToEth::new(route.inbox_address, route.inbox_provider.clone());
+    let inbox = IVeaInbox::new(route.inbox_address, route.inbox_provider.clone());
 
     let epoch_period = inbox.epochPeriod().call().await?.to::<u64>();
     let epoch_start_ts = epoch * epoch_period;
