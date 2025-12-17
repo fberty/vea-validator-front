@@ -20,7 +20,8 @@ const FINALITY_BUFFER_SECS: u64 = 15 * 60;
 const CATCHUP_SLEEP: Duration = Duration::from_secs(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(5 * 60);
 const RELAY_DELAY: u64 = 7 * 24 * 3600 + 3600;
-const SYNC_LOOKBACK_SECS: u64 = 8 * 24 * 3600 + 12 * 3600;
+// const SYNC_LOOKBACK_SECS: u64 = 8 * 24 * 3600 + 12 * 3600;
+const SYNC_LOOKBACK_SECS: u64 = 12 * 3600;
 const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
 
 async fn get_log_timestamp(log: &alloy::rpc::types::Log, provider: &DynProvider<Ethereum>) -> u64 {
@@ -65,8 +66,8 @@ pub struct EventIndexer {
     route: Route,
     task_store: TaskStore,
     claim_store: ClaimStore,
-    inbox_catchup_start: AtomicU64,
-    outbox_catchup_start: AtomicU64,
+    inbox_catchup: (AtomicU64, AtomicU64),
+    outbox_catchup: (AtomicU64, AtomicU64),
 }
 
 impl EventIndexer {
@@ -79,8 +80,8 @@ impl EventIndexer {
             route,
             task_store: TaskStore::new(schedule_path),
             claim_store: ClaimStore::new(claims_path),
-            inbox_catchup_start: AtomicU64::new(0),
-            outbox_catchup_start: AtomicU64::new(0),
+            inbox_catchup: (AtomicU64::new(0), AtomicU64::new(0)),
+            outbox_catchup: (AtomicU64::new(0), AtomicU64::new(0)),
         }
     }
 
@@ -144,8 +145,8 @@ impl EventIndexer {
         use ScanTarget::*;
 
         let (provider, address, label, catchup) = match target {
-            Inbox => (&self.route.inbox_provider, self.route.inbox_address, "Inbox", &self.inbox_catchup_start),
-            Outbox => (&self.route.outbox_provider, self.route.outbox_address, "Outbox", &self.outbox_catchup_start),
+            Inbox => (&self.route.inbox_provider, self.route.inbox_address, "Inbox", &self.inbox_catchup),
+            Outbox => (&self.route.outbox_provider, self.route.outbox_address, "Outbox", &self.outbox_catchup),
         };
 
         let current_block = match provider.get_block_number().await {
@@ -167,16 +168,23 @@ impl EventIndexer {
             Outbox => state.outbox_last_block.expect("outbox_last_block not set"),
         };
 
-        let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
-        let target_block = find_block_by_timestamp(provider, target_ts).await;
+        let (catchup_start, catchup_target) = catchup;
+        let mut target_block = catchup_target.load(Ordering::Relaxed);
+
+        if target_block == 0 || from_block >= target_block {
+            let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
+            target_block = find_block_by_timestamp(provider, target_ts).await;
+            catchup_target.store(target_block, Ordering::Relaxed);
+        }
 
         if from_block >= target_block {
-            catchup.store(0, Ordering::Relaxed);
+            catchup_start.store(0, Ordering::Relaxed);
+            catchup_target.store(0, Ordering::Relaxed);
             return true;
         }
 
-        if catchup.load(Ordering::Relaxed) == 0 {
-            catchup.store(from_block, Ordering::Relaxed);
+        if catchup_start.load(Ordering::Relaxed) == 0 {
+            catchup_start.store(from_block, Ordering::Relaxed);
         }
 
         let to_block = min(from_block + CHUNK_SIZE, target_block);
@@ -215,7 +223,7 @@ impl EventIndexer {
                     Outbox => self.task_store.update_outbox_block(to_block),
                 }
 
-                let start = catchup.load(Ordering::Relaxed);
+                let start = catchup_start.load(Ordering::Relaxed);
                 let start = if start == 0 { from_block } else { start };
                 let total = target_block.saturating_sub(start);
                 let done = to_block.saturating_sub(start);
@@ -223,7 +231,10 @@ impl EventIndexer {
                 println!("[{}][Indexer] {} {}-{} ({}% synced)", self.route.name, label, from_block, to_block, pct);
 
                 let is_done = to_block >= target_block;
-                if is_done { catchup.store(0, Ordering::Relaxed); }
+                if is_done {
+                    catchup_start.store(0, Ordering::Relaxed);
+                    catchup_target.store(0, Ordering::Relaxed);
+                }
                 is_done
             }
             Err(e) => {
