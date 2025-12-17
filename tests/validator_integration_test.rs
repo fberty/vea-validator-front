@@ -29,7 +29,10 @@ async fn test_save_snapshot() {
     assert_eq!(inbox.snapshots(U256::from(epoch)).call().await.unwrap(), FixedBytes::<32>::ZERO);
 
     let test_dir = tempfile::tempdir().unwrap();
-    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
+    let schedule_path = test_dir.path().join("schedule.json");
+    let task_store = tasks::TaskStore::new(&schedule_path);
+    task_store.set_on_sync(true);
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"), &schedule_path);
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -71,7 +74,10 @@ async fn test_claim() {
     assert_eq!(outbox.claimHashes(U256::from(epoch)).call().await.unwrap(), FixedBytes::<32>::ZERO);
 
     let test_dir = tempfile::tempdir().unwrap();
-    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
+    let schedule_path = test_dir.path().join("schedule.json");
+    let task_store = tasks::TaskStore::new(&schedule_path);
+    task_store.set_on_sync(true);
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"), &schedule_path);
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -101,7 +107,10 @@ async fn test_no_duplicate_snapshot() {
     let snapshot_before = inbox.snapshots(U256::from(epoch)).call().await.unwrap();
 
     let test_dir = tempfile::tempdir().unwrap();
-    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"));
+    let schedule_path = test_dir.path().join("schedule.json");
+    let task_store = tasks::TaskStore::new(&schedule_path);
+    task_store.set_on_sync(true);
+    let watcher = EpochWatcher::new(route.clone(), true, test_dir.path().join("claims.json"), &schedule_path);
     let handle = tokio::spawn(async move { watcher.watch_epochs(epoch_period).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
 

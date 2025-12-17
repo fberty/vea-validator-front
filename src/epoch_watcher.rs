@@ -4,7 +4,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::config::Route;
 use crate::tasks;
-use crate::tasks::ClaimStore;
+use crate::tasks::{ClaimStore, TaskStore};
 
 const BEFORE_EPOCH_BUFFER: u64 = 60;
 const AFTER_EPOCH_BUFFER: u64 = 15 * 60;
@@ -13,11 +13,17 @@ pub struct EpochWatcher {
     route: Route,
     make_claims: bool,
     claim_store: ClaimStore,
+    task_store: TaskStore,
 }
 
 impl EpochWatcher {
-    pub fn new(route: Route, make_claims: bool, claims_path: impl AsRef<Path>) -> Self {
-        Self { route, make_claims, claim_store: ClaimStore::new(claims_path.as_ref()) }
+    pub fn new(route: Route, make_claims: bool, claims_path: impl AsRef<Path>, schedule_path: impl AsRef<Path>) -> Self {
+        Self {
+            route,
+            make_claims,
+            claim_store: ClaimStore::new(claims_path.as_ref()),
+            task_store: TaskStore::new(schedule_path.as_ref()),
+        }
     }
 
     async fn get_current_timestamp(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
@@ -41,7 +47,7 @@ impl EpochWatcher {
                 last_before_epoch = Some(current_epoch);
             }
 
-            if self.make_claims {
+            if self.make_claims && self.task_store.is_on_sync() {
                 let time_since_epoch_start = now.saturating_sub(current_epoch * epoch_period);
                 if time_since_epoch_start >= AFTER_EPOCH_BUFFER && current_epoch > 0 {
                     let prev_epoch = current_epoch - 1;

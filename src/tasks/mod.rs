@@ -102,6 +102,8 @@ pub struct RouteState {
     pub outbox_last_block: Option<u64>,
     pub tasks: Vec<Task>,
     pub indexing_since: Option<u64>,
+    #[serde(default)]
+    pub on_sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,6 +273,16 @@ impl TaskStore {
         state.inbox_last_block = Some(inbox_block);
         state.outbox_last_block = Some(outbox_block);
         self.save(&state);
+    }
+
+    pub fn set_on_sync(&self, value: bool) {
+        let mut state = self.load();
+        state.on_sync = value;
+        self.save(&state);
+    }
+
+    pub fn is_on_sync(&self) -> bool {
+        self.load().on_sync
     }
 }
 

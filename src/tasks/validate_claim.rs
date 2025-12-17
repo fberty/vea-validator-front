@@ -1,4 +1,4 @@
-use alloy::primitives::{FixedBytes, U256};
+use alloy::primitives::U256;
 use crate::config::{Route, ValidatorConfig};
 use crate::contracts::IVeaInbox;
 use crate::tasks::{Task, TaskKind, TaskStore, ClaimStore, challenge};

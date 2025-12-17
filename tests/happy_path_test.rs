@@ -7,7 +7,7 @@ use vea_validator::{
     contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth},
     config::ValidatorConfig,
     indexer::EventIndexer,
-    tasks::dispatcher::TaskDispatcher,
+    tasks::{dispatcher::TaskDispatcher, TaskStore},
 };
 use common::{restore_pristine, advance_time, send_messages};
 use alloy::providers::Provider;
@@ -44,6 +44,7 @@ async fn test_start_verification() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -91,6 +92,7 @@ async fn test_verify_snapshot() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -145,6 +147,7 @@ async fn test_full_happy_path_via_indexer() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path.clone());
 
     indexer.scan_once().await;

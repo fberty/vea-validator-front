@@ -38,6 +38,10 @@ impl TaskDispatcher {
     }
 
     pub async fn process_pending(&self) {
+        if !self.task_store.is_on_sync() {
+            return;
+        }
+
         let state = self.task_store.load();
 
         let now = self.route.outbox_provider.get_block_by_number(Default::default()).await

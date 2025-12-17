@@ -15,7 +15,7 @@ async fn run_route(config: ValidatorConfig, route: Route, epoch_period: u64) {
 
     println!("[{}] Inbox: {:?}, Outbox: {:?}", route.name, route.inbox_address, route.outbox_address);
 
-    let watcher = EpochWatcher::new(route.clone(), config.make_claims, &claims_path);
+    let watcher = EpochWatcher::new(route.clone(), config.make_claims, &claims_path, &schedule_path);
     let indexer = EventIndexer::new(route.clone(), &schedule_path, &claims_path);
     let dispatcher = TaskDispatcher::new(config, route.clone(), &schedule_path, &claims_path);
 

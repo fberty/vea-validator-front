@@ -7,7 +7,7 @@ use vea_validator::{
     contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH},
     config::ValidatorConfig,
     indexer::EventIndexer,
-    tasks::dispatcher::TaskDispatcher,
+    tasks::{dispatcher::TaskDispatcher, TaskStore as TaskStoreImport},
     startup::ensure_weth_approval,
 };
 use common::{restore_pristine, advance_time, send_messages};
@@ -45,6 +45,7 @@ async fn test_challenge_bad_claim() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStoreImport::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -98,6 +99,7 @@ async fn test_challenge_bad_claim_gnosis() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStoreImport::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -184,6 +186,7 @@ async fn test_start_verification_drops_task_when_claim_challenged() {
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
     let task_store = TaskStore::new(&schedule_path);
+    task_store.set_on_sync(true);
 
     indexer.scan_once().await;
 

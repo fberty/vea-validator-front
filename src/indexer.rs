@@ -84,6 +84,7 @@ impl EventIndexer {
     }
 
     pub async fn initialize(&self) {
+        self.task_store.set_on_sync(false);
         let state = self.task_store.load();
 
         let inbox_now = self.route.inbox_provider.get_block_by_number(Default::default()).await
@@ -121,6 +122,10 @@ impl EventIndexer {
         loop {
             let done = self.scan_once().await;
             if done {
+                if !self.task_store.is_on_sync() {
+                    println!("[{}][Indexer] Sync complete", self.route.name);
+                    self.task_store.set_on_sync(true);
+                }
                 sleep(IDLE_SLEEP).await;
             } else {
                 sleep(CATCHUP_SLEEP).await;
@@ -200,7 +205,7 @@ impl EventIndexer {
                     }
                     match target {
                         Inbox => self.handle_snapshot_sent(&log).await,
-                        Outbox => self.dispatch_outbox_event(&log, now).await,
+                        Outbox => self.dispatch_outbox_event(&log).await,
                     }
                 }
 
@@ -227,14 +232,14 @@ impl EventIndexer {
         }
     }
 
-    async fn dispatch_outbox_event(&self, log: &alloy::rpc::types::Log, now: u64) {
+    async fn dispatch_outbox_event(&self, log: &alloy::rpc::types::Log) {
         let topic0 = match log.topics().first() {
             Some(t) => *t,
             None => return,
         };
 
         if topic0 == alloy::primitives::keccak256("Claimed(address,uint256,bytes32)") {
-            self.handle_claimed_event(log, now).await;
+            self.handle_claimed_event(log).await;
         } else if topic0 == alloy::primitives::keccak256("VerificationStarted(uint256)") {
             self.handle_verification_started_event(log).await;
         } else if topic0 == alloy::primitives::keccak256("Challenged(uint256,address)") {
@@ -287,7 +292,7 @@ impl EventIndexer {
         }
     }
 
-    async fn handle_claimed_event(&self, log: &alloy::rpc::types::Log, now: u64) {
+    async fn handle_claimed_event(&self, log: &alloy::rpc::types::Log) {
         if log.topics().len() < 3 {
             return;
         }
@@ -322,7 +327,7 @@ impl EventIndexer {
 
         self.task_store.add_task(Task {
             epoch,
-            execute_after: now,
+            execute_after: block_ts,
             kind: TaskKind::ValidateClaim,
         });
     }

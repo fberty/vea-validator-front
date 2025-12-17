@@ -7,7 +7,7 @@ use vea_validator::{
     contracts::{IVeaInboxArbToEth, IVeaOutboxArbToEth, IVeaInboxArbToGnosis, IVeaOutboxArbToGnosis, IWETH},
     config::ValidatorConfig,
     indexer::EventIndexer,
-    tasks::dispatcher::TaskDispatcher,
+    tasks::{dispatcher::TaskDispatcher, TaskStore},
     startup::ensure_weth_approval,
 };
 use std::str::FromStr;
@@ -46,6 +46,7 @@ async fn test_send_snapshot_after_challenge() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -163,6 +164,7 @@ async fn test_execute_relay() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path.clone());
 
     indexer.scan_once().await;
@@ -230,6 +232,7 @@ async fn test_send_snapshot_gnosis() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -291,6 +294,7 @@ async fn test_execute_relay_skips_spent() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path.clone(), claims_path.clone());
 
     indexer.scan_once().await;
@@ -341,6 +345,7 @@ async fn test_challenger_wins_bad_claim() {
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
