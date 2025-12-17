@@ -74,6 +74,11 @@ SEQ_INBOX="$(
     --constructor-args 86400 | addr_of
 )"
 
+ROLLUP_MOCK="$(
+  create contracts/src/test/bridge-mocks/arbitrum/RollupMock.sol:RollupMock \
+    "$ETH_RPC" | addr_of
+)"
+
 ETH_NONCE="$(cast nonce "$FROM" --rpc-url "$ETH_RPC")"
 BRIDGE_PREDICTED="$(cast compute-address "$FROM" --nonce $((ETH_NONCE + 1)) \
   | awk '/Computed Address:/ {print $3}')"
@@ -81,7 +86,7 @@ BRIDGE_PREDICTED="$(cast compute-address "$FROM" --nonce $((ETH_NONCE + 1)) \
 OUTBOX_MOCK="$(
   create contracts/src/test/bridge-mocks/arbitrum/OutboxMock.sol:OutboxMock \
     "$ETH_RPC" \
-    --constructor-args "$BRIDGE_PREDICTED" | addr_of
+    --constructor-args "$BRIDGE_PREDICTED" "$ROLLUP_MOCK" | addr_of
 )"
 
 BRIDGE="$(
@@ -214,6 +219,7 @@ echo ""
 echo "Bridge Mocks:"
 echo "  Bridge:               $BRIDGE"
 echo "  SequencerInbox:       $SEQ_INBOX"
+echo "  RollupMock:           $ROLLUP_MOCK"
 echo "  OutboxMock:           $OUTBOX_MOCK"
 echo "  AMB (Mainnet):        $AMB_MAINNET"
 echo "  AMB (Gnosis):         $AMB_GNOSIS"

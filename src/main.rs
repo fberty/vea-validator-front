@@ -7,7 +7,7 @@ use vea_validator::{
     tasks::{TaskStore, ClaimStore},
     contracts::IVeaInboxArbToEth,
     config::{ValidatorConfig, Route},
-    startup::{check_rpc_health, check_balances},
+    startup::{check_rpc_health, check_balances, load_route_settings},
 };
 
 async fn run_route(config: ValidatorConfig, route: Route, epoch_period: u64) {
@@ -45,9 +45,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let c = ValidatorConfig::from_env()?;
     println!("Validator wallet address: {}", c.wallet.default_signer().address());
 
-    let routes = c.build_routes();
+    let mut routes = c.build_routes();
     check_rpc_health(&routes).await?;
     check_balances(&c, &routes).await?;
+
+    let eth_provider = routes[0].outbox_provider.clone();
+    for route in routes.iter_mut() {
+        route.settings = load_route_settings(route, c.arb_outbox, &eth_provider).await;
+    }
 
     let inbox = IVeaInboxArbToEth::new(routes[0].inbox_address, routes[0].inbox_provider.clone());
     let epoch_period: u64 = inbox.epochPeriod().call().await?.try_into()?;

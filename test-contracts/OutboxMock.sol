@@ -7,11 +7,13 @@ import "./BridgeMock.sol";
 
 contract OutboxMock is IOutbox {
     address public bridge;
+    address public rollup;
     mapping(uint256 => bool) public spent;
     address private _l2ToL1Sender;
 
-    constructor(address _bridge) {
+    constructor(address _bridge, address _rollup) {
         bridge = _bridge;
+        rollup = _rollup;
     }
 
     function l2ToL1Sender() external view returns (address) {

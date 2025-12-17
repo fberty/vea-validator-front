@@ -63,6 +63,8 @@ sol! {
         function deposit() external view returns (uint256);
         function claimHashes(uint256 epoch) external view returns (bytes32);
         function epochPeriod() external view returns (uint256);
+        function sequencerDelayLimit() external view returns (uint256);
+        function minChallengePeriod() external view returns (uint256);
         function stateRoot() external view returns (bytes32);
     }
 
@@ -167,6 +169,13 @@ sol! {
             bytes calldata data
         ) external;
         function isSpent(uint256 index) external view returns (bool);
+        function rollup() external view returns (address);
+    }
+
+    #[derive(Debug)]
+    #[sol(rpc)]
+    interface IRollup {
+        function confirmPeriodBlocks() external view returns (uint64);
     }
 
     #[derive(Debug)]

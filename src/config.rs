@@ -18,6 +18,25 @@ pub struct ChainInfo {
 }
 
 #[derive(Clone)]
+pub struct RouteSettings {
+    pub relay_delay_secs: u64,
+    pub start_verification_delay: u64,
+    pub min_challenge_period: u64,
+    pub sync_lookback_secs: u64,
+}
+
+impl RouteSettings {
+    pub fn test_defaults() -> Self {
+        Self {
+            relay_delay_secs: 7 * 24 * 3600,
+            start_verification_delay: 86400 + 3600,
+            min_challenge_period: 600,
+            sync_lookback_secs: 12 * 3600,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Route {
     pub name: &'static str,
     pub inbox_chain_id: u64,
@@ -28,6 +47,7 @@ pub struct Route {
     pub outbox_address: Address,
     pub outbox_provider: DynProvider<Ethereum>,
     pub weth_address: Option<Address>,
+    pub settings: RouteSettings,
 }
 
 #[derive(Clone)]
@@ -90,6 +110,7 @@ impl ValidatorConfig {
                 outbox_address: self.outbox_arb_to_eth,
                 outbox_provider: eth_provider.clone(),
                 weth_address: self.chains.get(&1).expect("Ethereum").deposit_token,
+                settings: RouteSettings::test_defaults(),
             },
             Route {
                 name: "ARB_TO_GNOSIS",
@@ -101,6 +122,7 @@ impl ValidatorConfig {
                 outbox_address: self.outbox_arb_to_gnosis,
                 outbox_provider: gnosis_provider.clone(),
                 weth_address: self.chains.get(&100).expect("Gnosis").deposit_token,
+                settings: RouteSettings::test_defaults(),
             },
         ]
     }

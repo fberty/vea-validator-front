@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::{sleep, Duration};
 
 use crate::config::Route;
-use crate::contracts::{IVeaInbox, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
+use crate::contracts::IVeaInbox;
 use crate::tasks::{Task, TaskKind, TaskStore, ClaimStore, ClaimData};
 
 use alloy::network::Ethereum;
@@ -19,8 +19,6 @@ const CHUNK_SIZE: u64 = 2000;
 const FINALITY_BUFFER_SECS: u64 = 15 * 60;
 const CATCHUP_SLEEP: Duration = Duration::from_secs(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(5 * 60);
-const RELAY_DELAY: u64 = 7 * 24 * 3600 + 3600;
-const SYNC_LOOKBACK_SECS: u64 = 18 * 3600;
 const ARB_SYS: Address = Address::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x64]);
 
 async fn get_log_timestamp(log: &alloy::rpc::types::Log, provider: &DynProvider<Ethereum>) -> u64 {
@@ -107,13 +105,13 @@ impl EventIndexer {
                     .expect("Failed to get outbox last block")
                     .expect("Outbox last block not found")
                     .header.timestamp;
-                inbox_ts < inbox_now.saturating_sub(SYNC_LOOKBACK_SECS)
-                    || outbox_ts < inbox_now.saturating_sub(SYNC_LOOKBACK_SECS)
+                inbox_ts < inbox_now.saturating_sub(self.route.settings.sync_lookback_secs)
+                    || outbox_ts < inbox_now.saturating_sub(self.route.settings.sync_lookback_secs)
             }
         };
 
         if needs_init {
-            let indexing_since = inbox_now.saturating_sub(SYNC_LOOKBACK_SECS);
+            let indexing_since = inbox_now.saturating_sub(self.route.settings.sync_lookback_secs);
             let inbox_start = find_block_by_timestamp(&self.route.inbox_provider, indexing_since).await;
             let outbox_start = find_block_by_timestamp(&self.route.outbox_provider, indexing_since).await;
             self.task_store.lock().unwrap().initialize_sync(indexing_since, inbox_start, outbox_start);
@@ -366,7 +364,7 @@ impl EventIndexer {
         if !self.claim_store.lock().unwrap().exists(epoch) {
             let block_ts = get_log_timestamp(log, &self.route.outbox_provider).await;
             let state = self.task_store.lock().unwrap().load();
-            let grace_end = state.indexing_since.unwrap_or(0) + SYNC_LOOKBACK_SECS;
+            let grace_end = state.indexing_since.unwrap_or(0) + self.route.settings.sync_lookback_secs;
 
             if block_ts < grace_end {
                 println!("[{}][Indexer] Dropping VerificationStarted for epoch {} - claim outside sync window", self.route.name, epoch);
@@ -383,10 +381,7 @@ impl EventIndexer {
             c.blocknumber_verification = block_num;
         });
 
-        let min_challenge_period = self.get_min_challenge_period().await
-            .expect("Failed to get minChallengePeriod");
-
-        let execute_after = (block_ts as u64) + min_challenge_period;
+        let execute_after = (block_ts as u64) + self.route.settings.min_challenge_period;
 
         self.task_store.lock().unwrap().add_task(Task {
             epoch,
@@ -407,7 +402,7 @@ impl EventIndexer {
         if !self.claim_store.lock().unwrap().exists(epoch) {
             let block_ts = get_log_timestamp(log, &self.route.outbox_provider).await;
             let state = self.task_store.lock().unwrap().load();
-            let grace_end = state.indexing_since.unwrap_or(0) + SYNC_LOOKBACK_SECS;
+            let grace_end = state.indexing_since.unwrap_or(0) + self.route.settings.sync_lookback_secs;
 
             if block_ts < grace_end {
                 println!("[{}][Indexer] Dropping Challenged for epoch {} - claim outside sync window", self.route.name, epoch);
@@ -442,7 +437,7 @@ impl EventIndexer {
 
         if !self.claim_store.lock().unwrap().exists(epoch) {
             let state = self.task_store.lock().unwrap().load();
-            let grace_end = state.indexing_since.unwrap_or(0) + SYNC_LOOKBACK_SECS;
+            let grace_end = state.indexing_since.unwrap_or(0) + self.route.settings.sync_lookback_secs;
 
             if block_ts < grace_end {
                 println!("[{}][Indexer] Dropping Verified for epoch {} - claim outside sync window", self.route.name, epoch);
@@ -537,7 +532,7 @@ impl EventIndexer {
 
             return Some((
                 epoch,
-                block_timestamp + RELAY_DELAY,
+                block_timestamp + self.route.settings.relay_delay_secs,
                 position,
                 caller,
                 destination,
@@ -549,16 +544,6 @@ impl EventIndexer {
             ));
         }
         None
-    }
-
-    async fn get_min_challenge_period(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        if self.route.weth_address.is_some() {
-            let outbox = IVeaOutboxArbToGnosis::new(self.route.outbox_address, self.route.outbox_provider.clone());
-            Ok(outbox.minChallengePeriod().call().await?.to::<u64>())
-        } else {
-            let outbox = IVeaOutboxArbToEth::new(self.route.outbox_address, self.route.outbox_provider.clone());
-            Ok(outbox.minChallengePeriod().call().await?.to::<u64>())
-        }
     }
 
     async fn get_inbox_snapshot(&self, epoch: u64) -> FixedBytes<32> {

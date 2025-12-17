@@ -1,8 +1,10 @@
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, DynProvider};
 use alloy::network::Ethereum;
-use crate::contracts::{IVeaOutboxArbToEth, IVeaOutboxArbToGnosis, IWETH};
-use crate::config::{ValidatorConfig, Route};
+use crate::contracts::{IVeaOutbox, IWETH, IOutbox, IRollup};
+use crate::config::{ValidatorConfig, Route, RouteSettings};
+
+const TIMING_SAFETY_BUFFER_SECS: u64 = 10 * 60;
 
 pub async fn check_rpc_health(routes: &[Route]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Checking RPC endpoint health...");
@@ -28,8 +30,8 @@ pub async fn check_balances(c: &ValidatorConfig, routes: &[Route]) -> Result<(),
     let eth_provider = routes[0].outbox_provider.clone();
     let gnosis_provider = routes[1].outbox_provider.clone();
 
-    let eth_outbox = IVeaOutboxArbToEth::new(c.outbox_arb_to_eth, eth_provider.clone());
-    let gnosis_outbox = IVeaOutboxArbToGnosis::new(c.outbox_arb_to_gnosis, gnosis_provider.clone());
+    let eth_outbox = IVeaOutbox::new(c.outbox_arb_to_eth, eth_provider.clone());
+    let gnosis_outbox = IVeaOutbox::new(c.outbox_arb_to_gnosis, gnosis_provider.clone());
 
     let eth_deposit = eth_outbox.deposit().call().await?;
     let eth_balance = eth_provider.get_balance(wallet_address).await?;
@@ -81,4 +83,59 @@ pub async fn ensure_weth_approval(c: &ValidatorConfig, gnosis_provider: DynProvi
     }
 
     Ok(())
+}
+
+async fn get_avg_block_time_ms(provider: &DynProvider<Ethereum>) -> u64 {
+    let latest = provider.get_block_number().await
+        .expect("Failed to get latest block number");
+    let latest_block = provider.get_block_by_number(latest.into()).await
+        .expect("Failed to get latest block")
+        .expect("Latest block not found");
+    let old_block = provider.get_block_by_number((latest - 10000).into()).await
+        .expect("Failed to get old block")
+        .expect("Old block not found");
+
+    let time_diff = latest_block.header.timestamp - old_block.header.timestamp;
+    (time_diff * 1000) / 10000
+}
+
+pub async fn load_route_settings(
+    route: &Route,
+    arb_outbox_address: Address,
+    arb_outbox_provider: &DynProvider<Ethereum>,
+) -> RouteSettings {
+    println!("[{}] Loading route settings from contracts...", route.name);
+
+    let avg_block_time_ms = get_avg_block_time_ms(arb_outbox_provider).await;
+    println!("[{}] Average block time: {}ms", route.name, avg_block_time_ms);
+
+    let arb_outbox = IOutbox::new(arb_outbox_address, arb_outbox_provider.clone());
+    let rollup_address = arb_outbox.rollup().call().await
+        .expect("Failed to get rollup address from Arbitrum outbox");
+    let rollup = IRollup::new(rollup_address, arb_outbox_provider.clone());
+    let confirm_period_blocks: u64 = rollup.confirmPeriodBlocks().call().await
+        .expect("Failed to get confirmPeriodBlocks");
+    println!("[{}] Rollup confirmPeriodBlocks: {}", route.name, confirm_period_blocks);
+
+    let outbox = IVeaOutbox::new(route.outbox_address, route.outbox_provider.clone());
+    let sequencer_delay_limit = outbox.sequencerDelayLimit().call().await.expect("Failed to get sequencerDelayLimit").to::<u64>();
+    let min_challenge_period = outbox.minChallengePeriod().call().await.expect("Failed to get minChallengePeriod").to::<u64>();
+    let epoch_period = outbox.epochPeriod().call().await.expect("Failed to get epochPeriod").to::<u64>();
+    println!("[{}] Outbox params: sequencerDelayLimit={}s, epochPeriod={}s, minChallengePeriod={}s",
+        route.name, sequencer_delay_limit, epoch_period, min_challenge_period);
+
+    let relay_delay_secs = (confirm_period_blocks * avg_block_time_ms / 1000) + TIMING_SAFETY_BUFFER_SECS;
+    let start_verification_delay = sequencer_delay_limit + epoch_period + TIMING_SAFETY_BUFFER_SECS;
+    let min_challenge_period_with_buffer = min_challenge_period + TIMING_SAFETY_BUFFER_SECS;
+    let sync_lookback_secs = relay_delay_secs + start_verification_delay + min_challenge_period_with_buffer + TIMING_SAFETY_BUFFER_SECS;
+
+    println!("[{}] Computed: relay_delay={}s, start_verification_delay={}s, min_challenge_period={}s, sync_lookback={}s",
+        route.name, relay_delay_secs, start_verification_delay, min_challenge_period_with_buffer, sync_lookback_secs);
+
+    RouteSettings {
+        relay_delay_secs,
+        start_verification_delay,
+        min_challenge_period: min_challenge_period_with_buffer,
+        sync_lookback_secs,
+    }
 }
