@@ -32,12 +32,12 @@ Scans inbox/outbox logs in chunks. Only processes events from blocks older than 
 
 Reacts to events:
 - `outbox.Claimed` → schedules `task::validate_claim`
-  - if valid → schedules `task::start_verification` (25h delay)
+  - if valid → schedules `task::start_verification` (after `start_verification_delay`)
   - if invalid → schedules `task::challenge`
 - `outbox.VerificationStarted` → schedules `task::verify_snapshot` (after minChallengePeriod)
 - `outbox.Challenged` → schedules `task::send_snapshot`
 - `outbox.Verified` → schedules `task::withdraw_deposit`
-- `inbox.SnapshotSent` → schedules `task::execute_relay` (7d + 1h delay), **only if emitted by this validator**
+- `inbox.SnapshotSent` → schedules `task::execute_relay` (after `relay_delay`), **only if emitted by this validator**
 
 ### TaskDispatcher
 Polls every 15s. Executes tasks when `execute_after` timestamp reached.
@@ -56,14 +56,14 @@ Each route has its own JSON files for persistence:
 | `validate_claim` | Claimed event | compares state roots, schedules challenge or start_verification |
 | `challenge` | invalid claim | challenges with deposit |
 | `send_snapshot` | Challenged event | sends snapshot via native bridge |
-| `start_verification` | valid claim (25h delay) | starts verification period |
+| `start_verification` | valid claim (after `start_verification_delay`) | starts verification period |
 | `verify_snapshot` | VerificationStarted + minChallengePeriod | finalizes verification |
-| `execute_relay` | SnapshotSent (7d+1h delay) | executes L2→L1 message on Arbitrum outbox |
+| `execute_relay` | SnapshotSent (after `relay_delay`) | executes L2→L1 message on Arbitrum outbox |
 | `withdraw_deposit` | Verified event | withdraws to honest party |
 
 ## Sync Behavior
 
-On startup, indexer initializes from `now - 8d12h`. Events older than sync window are dropped gracefully. Tasks only execute when `on_sync=true`.
+On startup, indexer initializes from `now - sync_lookback_secs`. The lookback is computed dynamically from contract parameters: `relay_delay + start_verification_delay + min_challenge_period + buffer`. Events older than sync window are dropped gracefully. Tasks only execute when `on_sync=true`.
 
 ## Error Handling
 
@@ -108,7 +108,7 @@ Each task has its own way of detecting and handling race conditions (another val
 
 If we see `Verified`, `VerificationStarted`, or `Challenged` for an epoch whose `Claimed` event was emitted before our sync window, we drop it - we can't reconstruct claim data we never saw.
 
-**Starting mid-bridge:** The validator can be started at any time. On first run (or after a hiatus longer than 8d12h), `indexing_since` is set to `now - 8d12h` and persisted. Events for epochs whose `Claimed` was before this window are dropped - the contract only stores a claim hash, so the full `Claim` struct can only be reconstructed from witnessing the original `Claimed` event.
+**Starting mid-bridge:** The validator can be started at any time. On first run (or after a hiatus longer than `sync_lookback_secs`), `indexing_since` is set to `now - sync_lookback_secs` and persisted. Events for epochs whose `Claimed` was before this window are dropped - the contract only stores a claim hash, so the full `Claim` struct can only be reconstructed from witnessing the original `Claimed` event.
 
 ## SnapshotSent Filtering
 
