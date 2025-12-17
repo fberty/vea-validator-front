@@ -81,6 +81,40 @@ impl EventIndexer {
         }
     }
 
+    pub async fn initialize(&self) {
+        let state = self.task_store.load();
+
+        let inbox_now = self.route.inbox_provider.get_block_by_number(Default::default()).await
+            .expect("Failed to get inbox block")
+            .expect("Inbox block not found")
+            .header.timestamp;
+
+        let needs_init = match (state.inbox_last_block, state.outbox_last_block) {
+            (None, _) | (_, None) => true,
+            (Some(inbox_b), Some(outbox_b)) => {
+                let inbox_ts = self.route.inbox_provider.get_block_by_number(inbox_b.into()).await
+                    .expect("Failed to get inbox last block")
+                    .expect("Inbox last block not found")
+                    .header.timestamp;
+                let outbox_ts = self.route.outbox_provider.get_block_by_number(outbox_b.into()).await
+                    .expect("Failed to get outbox last block")
+                    .expect("Outbox last block not found")
+                    .header.timestamp;
+                inbox_ts < inbox_now.saturating_sub(SYNC_LOOKBACK_SECS)
+                    || outbox_ts < inbox_now.saturating_sub(SYNC_LOOKBACK_SECS)
+            }
+        };
+
+        if needs_init {
+            let indexing_since = inbox_now.saturating_sub(SYNC_LOOKBACK_SECS);
+            let inbox_start = find_block_by_timestamp(&self.route.inbox_provider, indexing_since).await;
+            let outbox_start = find_block_by_timestamp(&self.route.outbox_provider, indexing_since).await;
+            self.task_store.initialize_sync(indexing_since, inbox_start, outbox_start);
+            println!("[{}][Indexer] Initialized sync: indexing_since={}, inbox_start={}, outbox_start={}",
+                self.route.name, indexing_since, inbox_start, outbox_start);
+        }
+    }
+
     pub async fn run(&self) {
         loop {
             let done = self.scan_once().await;
@@ -115,25 +149,7 @@ impl EventIndexer {
         let now = current_block_data.header.timestamp;
 
         let state = self.task_store.load();
-
-        let needs_indexing_since_update = match state.indexing_since {
-            None => true,
-            Some(ts) => now > ts + SYNC_LOOKBACK_SECS,
-        };
-
-        if needs_indexing_since_update {
-            let new_indexing_since = now.saturating_sub(SYNC_LOOKBACK_SECS);
-            self.task_store.set_indexing_since(new_indexing_since);
-            println!("[{}][Indexer] Set indexing_since to {}", self.route.name, new_indexing_since);
-        }
-
-        let from_block = match state.inbox_last_block {
-            Some(b) => b,
-            None => {
-                let start_ts = now.saturating_sub(SYNC_LOOKBACK_SECS);
-                find_block_by_timestamp(&self.route.inbox_provider, start_ts).await
-            }
-        };
+        let from_block = state.inbox_last_block.expect("inbox_last_block not set - call initialize() first");
 
         let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
         let target_block = find_block_by_timestamp(&self.route.inbox_provider, target_ts).await;
@@ -210,14 +226,7 @@ impl EventIndexer {
         let now = current_block_data.header.timestamp;
 
         let state = self.task_store.load();
-
-        let from_block = match state.outbox_last_block {
-            Some(b) => b,
-            None => {
-                let start_ts = now.saturating_sub(SYNC_LOOKBACK_SECS);
-                find_block_by_timestamp(&self.route.outbox_provider, start_ts).await
-            }
-        };
+        let from_block = state.outbox_last_block.expect("outbox_last_block not set - call initialize() first");
 
         let target_ts = now.saturating_sub(FINALITY_BUFFER_SECS);
         let target_block = find_block_by_timestamp(&self.route.outbox_provider, target_ts).await;

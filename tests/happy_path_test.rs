@@ -43,6 +43,7 @@ async fn test_start_verification() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -89,6 +90,7 @@ async fn test_verify_snapshot() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -142,6 +144,7 @@ async fn test_full_happy_path_via_indexer() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path.clone());
 
     indexer.scan_once().await;

@@ -115,7 +115,6 @@ impl ValidatorConfig {
     }
 
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        dotenv::dotenv().ok();
 
         let arbitrum_rpcs = Self::parse_rpc_urls("ARBITRUM_RPC_URL");
         let ethereum_rpcs = Self::parse_rpc_urls("ETHEREUM_RPC_URL");

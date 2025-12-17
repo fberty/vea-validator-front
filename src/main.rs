@@ -19,6 +19,8 @@ async fn run_route(config: ValidatorConfig, route: Route, epoch_period: u64) {
     let indexer = EventIndexer::new(route.clone(), &schedule_path, &claims_path);
     let dispatcher = TaskDispatcher::new(config, route.clone(), &schedule_path, &claims_path);
 
+    indexer.initialize().await;
+
     tokio::select! {
         r = watcher.watch_epochs(epoch_period) => {
             panic!("[{}] Epoch watcher died: {:?}", route.name, r);

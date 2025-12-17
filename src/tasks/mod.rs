@@ -264,6 +264,14 @@ impl TaskStore {
         state.indexing_since = Some(ts);
         self.save(&state);
     }
+
+    pub fn initialize_sync(&self, indexing_since: u64, inbox_block: u64, outbox_block: u64) {
+        let mut state = self.load();
+        state.indexing_since = Some(indexing_since);
+        state.inbox_last_block = Some(inbox_block);
+        state.outbox_last_block = Some(outbox_block);
+        self.save(&state);
+    }
 }
 
 mod u256_hex {

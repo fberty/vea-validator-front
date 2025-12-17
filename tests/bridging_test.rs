@@ -45,6 +45,7 @@ async fn test_send_snapshot_after_challenge() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -89,6 +90,7 @@ async fn test_send_snapshot_on_challenged_event() {
     let test_dir = tempfile::tempdir().unwrap();
     let schedule_path = test_dir.path().join("schedule.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), test_dir.path().join("claims.json"));
+    indexer.initialize().await;
 
     indexer.scan_once().await;
 
@@ -160,6 +162,7 @@ async fn test_execute_relay() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path.clone());
 
     indexer.scan_once().await;
@@ -226,6 +229,7 @@ async fn test_send_snapshot_gnosis() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
@@ -286,6 +290,7 @@ async fn test_execute_relay_skips_spent() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path.clone(), claims_path.clone());
 
     indexer.scan_once().await;
@@ -335,6 +340,7 @@ async fn test_challenger_wins_bad_claim() {
     let schedule_path = test_dir.path().join("schedule.json");
     let claims_path = test_dir.path().join("claims.json");
     let indexer = EventIndexer::new(route.clone(), schedule_path.clone(), claims_path.clone());
+    indexer.initialize().await;
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
