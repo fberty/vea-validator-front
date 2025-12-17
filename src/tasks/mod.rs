@@ -77,6 +77,7 @@ pub enum TaskKind {
         #[serde(with = "bytes_hex")]
         data: Bytes,
     },
+    WithdrawDeposit,
 }
 
 impl TaskKind {
@@ -90,6 +91,7 @@ impl TaskKind {
             TaskKind::StartVerification => "StartVerification",
             TaskKind::VerifySnapshot => "VerifySnapshot",
             TaskKind::ExecuteRelay { .. } => "ExecuteRelay",
+            TaskKind::WithdrawDeposit => "WithdrawDeposit",
         }
     }
 }

@@ -8,7 +8,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::config::Route;
 use crate::contracts::{IVeaInbox, IVeaOutboxArbToEth, IVeaOutboxArbToGnosis};
-use crate::tasks::{self, Task, TaskKind, TaskStore, ClaimStore, ClaimData, send_snapshot};
+use crate::tasks::{Task, TaskKind, TaskStore, ClaimStore, ClaimData};
 
 use alloy::network::Ethereum;
 use alloy::providers::DynProvider;
@@ -421,10 +421,12 @@ impl EventIndexer {
             c.challenger = challenger;
         });
 
-        println!("[{}][Indexer] Challenged event for epoch {} - sending snapshot immediately", self.route.name, epoch);
-
-        send_snapshot::execute(&self.route, epoch, &self.claim_store).await
-            .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to send snapshot for epoch {}: {}", self.route.name, epoch, e));
+        let block_ts = get_log_timestamp(log, &self.route.outbox_provider).await;
+        self.task_store.add_task(Task {
+            epoch,
+            execute_after: block_ts,
+            kind: TaskKind::SendSnapshot,
+        });
     }
 
     async fn handle_verified_event(&self, log: &alloy::rpc::types::Log) {
@@ -437,8 +439,9 @@ impl EventIndexer {
         };
         println!("[{}][Indexer] Verified event for epoch {} at block {}", self.route.name, epoch, log.block_number.unwrap_or(0));
 
+        let block_ts = get_log_timestamp(log, &self.route.outbox_provider).await;
+
         if !self.claim_store.exists(epoch) {
-            let block_ts = get_log_timestamp(log, &self.route.outbox_provider).await;
             let state = self.task_store.load();
             let grace_end = state.indexing_since.unwrap_or(0) + SYNC_LOOKBACK_SECS;
 
@@ -463,8 +466,11 @@ impl EventIndexer {
             c.honest = honest.to_string();
         });
 
-        tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await
-            .unwrap_or_else(|e| panic!("[{}] FATAL: Failed to withdraw deposit for epoch {}: {}", self.route.name, epoch, e));
+        self.task_store.add_task(Task {
+            epoch,
+            execute_after: block_ts,
+            kind: TaskKind::WithdrawDeposit,
+        });
     }
 
     fn parse_epoch_from_snapshot_sent(&self, log: &alloy::rpc::types::Log) -> Option<u64> {

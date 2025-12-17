@@ -1,4 +1,4 @@
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use crate::config::Route;
 use crate::contracts::IVeaOutbox;
 use crate::tasks::{send_tx, ClaimStore};
@@ -8,8 +8,13 @@ pub async fn execute(
     epoch: u64,
     claim_store: &ClaimStore,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let claim = claim_store.get_claim(epoch);
+    let claim_data = claim_store.get(epoch);
+    if claim_data.challenger != Address::ZERO {
+        println!("[{}][task::start_verification] Epoch {} already challenged, dropping task", route.name, epoch);
+        return Ok(());
+    }
 
+    let claim = claim_store.get_claim(epoch);
     let outbox = IVeaOutbox::new(route.outbox_address, route.outbox_provider.clone());
     send_tx(
         outbox.startVerification(U256::from(epoch), claim).send().await,

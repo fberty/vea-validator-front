@@ -56,6 +56,7 @@ async fn test_send_snapshot_after_challenge() {
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
     let sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
     let filter = alloy::rpc::types::Filter::new().address(route.inbox_address).event_signature(sig).from_block(0u64);
@@ -92,9 +93,12 @@ async fn test_send_snapshot_on_challenged_event() {
 
     let test_dir = tempfile::tempdir().unwrap();
     let schedule_path = test_dir.path().join("schedule.json");
+    let claims_path = test_dir.path().join("claims.json");
     let wallet_address = c.wallet.default_signer().address();
-    let indexer = EventIndexer::new(route.clone(), wallet_address, schedule_path.clone(), test_dir.path().join("claims.json"));
+    let indexer = EventIndexer::new(route.clone(), wallet_address, schedule_path.clone(), claims_path.clone());
     indexer.initialize().await;
+    TaskStore::new(&schedule_path).set_on_sync(true);
+    let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path);
 
     indexer.scan_once().await;
 
@@ -111,6 +115,7 @@ async fn test_send_snapshot_on_challenged_event() {
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
     let sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
     let filter = alloy::rpc::types::Filter::new().address(route.inbox_address).event_signature(sig).from_block(0u64);
@@ -172,6 +177,7 @@ async fn test_execute_relay() {
     let dispatcher = TaskDispatcher::new(c.clone(), route.clone(), schedule_path, claims_path.clone());
 
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
@@ -187,8 +193,9 @@ async fn test_execute_relay() {
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
-    let balance_after_withdraw = outbox_provider.get_balance(c.wallet.default_signer().address()).await.unwrap();
+    let balance_after_withdraw = outbox_provider.get_balance(wallet_address).await.unwrap();
     assert!(balance_after_withdraw > balance_after_challenge, "Deposit was not returned to claimer (honest) after disputed verification");
 
     let claim_store = vea_validator::tasks::ClaimStore::new(claims_path);
@@ -245,6 +252,7 @@ async fn test_send_snapshot_gnosis() {
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
     let sig = alloy::primitives::keccak256("SnapshotSent(uint256,bytes32)");
     let filter = alloy::rpc::types::Filter::new().address(route.inbox_address).event_signature(sig).from_block(0u64);
@@ -366,6 +374,7 @@ async fn test_challenger_wins_bad_claim() {
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;
+    dispatcher.process_pending().await;
 
     advance_time(15 * 60 + 10).await;
     indexer.scan_once().await;

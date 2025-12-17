@@ -122,6 +122,9 @@ impl TaskDispatcher {
                     data.clone(),
                 ).await.is_ok()
             }
+            TaskKind::WithdrawDeposit => {
+                tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await.is_ok()
+            }
         }
     }
 }
