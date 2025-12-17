@@ -27,7 +27,7 @@ pub async fn execute(
 
     let proof = fetch_outbox_proof(route, position).await?;
 
-    send_tx(
+    let result = send_tx(
         outbox.executeTransaction(
             proof,
             position,
@@ -42,7 +42,15 @@ pub async fn execute(
         "executeTransaction",
         route.name,
         &[],
-    ).await
+    ).await;
+
+    if let Err(e) = &result {
+        if e.to_string().contains("reverted") {
+            println!("[{}] executeTransaction reverted, dropping task", route.name);
+            return Ok(());
+        }
+    }
+    result
 }
 
 async fn fetch_outbox_proof(
