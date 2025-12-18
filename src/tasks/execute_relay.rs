@@ -22,10 +22,17 @@ pub async fn execute(
 
     let is_spent = outbox.isSpent(position).call().await?;
     if is_spent {
+        println!("[{}][task::execute_relay] position {} already spent", route.name, position);
         return Ok(());
     }
 
-    let proof = fetch_outbox_proof(route, position).await?;
+    let (proof, root) = fetch_outbox_proof(route, position).await?;
+
+    let root_exists = outbox.roots(root).call().await?;
+    if root_exists.is_zero() {
+        println!("[{}][task::execute_relay] root {:#x} not yet confirmed in Outbox, rescheduling", route.name, root);
+        return Err("RootNotConfirmed".into());
+    }
 
     let result = send_tx(
         outbox.executeTransaction(
@@ -54,7 +61,7 @@ pub async fn execute(
 async fn fetch_outbox_proof(
     route: &Route,
     position: U256,
-) -> Result<Vec<FixedBytes<32>>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Vec<FixedBytes<32>>, FixedBytes<32>), Box<dyn std::error::Error + Send + Sync>> {
     let arb_sys = IArbSys::new(ARB_SYS, route.inbox_provider.clone());
     let state = arb_sys.sendMerkleTreeState().from(Address::ZERO).call().await?;
     let size = state.size;
@@ -63,5 +70,5 @@ async fn fetch_outbox_proof(
     let leaf = position.to::<u64>();
     let result = node_interface.constructOutboxProof(size, leaf).call().await?;
 
-    Ok(result.proof)
+    Ok((result.proof, result.root))
 }

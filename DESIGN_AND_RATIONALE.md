@@ -96,6 +96,7 @@ Each task has its own way of detecting and handling race conditions (another val
 | `verify_snapshot` | on revert: `Verified` event emitted | drop task |
 | `verify_snapshot` | on revert: `Challenged` event emitted | drop task |
 | `execute_relay` | `isSpent(position) == true` | drop task |
+| `execute_relay` | `roots(root) == 0` | reschedule +1hr |
 | `execute_relay` | any revert | drop task (unreliable error messages from Arbitrum outbox) |
 | `withdraw_deposit` | `claimHashes[epoch] == 0` (pre-check) | drop task |
 | `withdraw_deposit` | on revert: `claimHashes[epoch] == 0` | drop task |
@@ -139,6 +140,8 @@ Two types of route-specific branching:
 
 ## Known Issues
 
-### Execute Relay (WIP)
+### Execute Relay
 
-L2→L1 message relay via `execute_relay` is currently broken on Sepolia. Getting `UnknownRoot` errors when calling `Outbox.executeTransaction`. Investigation ongoing.
+L2→L1 message relay requires the merkle root to be confirmed on the L1 Arbitrum Outbox before `executeTransaction` can succeed. Roots are posted when rollup assertions are confirmed (after `confirmPeriodBlocks`). If the root isn't confirmed yet, `execute_relay` detects this via `outbox.roots(root) == 0` and reschedules +1 hour.
+
+However, the reason the root is not included may be a computing error, this is being looked into.

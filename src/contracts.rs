@@ -171,6 +171,7 @@ sol! {
         ) external;
         function isSpent(uint256 index) external view returns (bool);
         function rollup() external view returns (address);
+        function roots(bytes32 root) external view returns (bytes32);
     }
 
     #[derive(Debug)]

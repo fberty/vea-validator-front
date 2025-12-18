@@ -113,7 +113,7 @@ impl TaskDispatcher {
                 tasks::verify_snapshot::execute(&self.route, epoch, &self.claim_store).await.is_ok()
             }
             TaskKind::ExecuteRelay { position, l2_sender, dest_addr, l2_block, l1_block, l2_timestamp, amount, data } => {
-                tasks::execute_relay::execute(
+                match tasks::execute_relay::execute(
                     &self.route,
                     self.config.arb_outbox,
                     *position,
@@ -124,7 +124,14 @@ impl TaskDispatcher {
                     *l2_timestamp,
                     *amount,
                     data.clone(),
-                ).await.is_ok()
+                ).await {
+                    Ok(_) => true,
+                    Err(e) if e.to_string() == "RootNotConfirmed" => {
+                        self.task_store.lock().unwrap().reschedule_task(task, current_timestamp + 60 * 60);
+                        true
+                    }
+                    Err(_) => false,
+                }
             }
             TaskKind::WithdrawDeposit => {
                 tasks::withdraw_deposit::execute(&self.route, epoch, &self.claim_store).await.is_ok()
