@@ -58,8 +58,8 @@ async fn fetch_outbox_proof(
     position: U256,
 ) -> Result<Vec<FixedBytes<32>>, Box<dyn std::error::Error + Send + Sync>> {
     let arb_sys = IArbSys::new(ARB_SYS, route.inbox_provider.clone());
-    let state = arb_sys.sendMerkleTreeState().call().await?;
-    let size = state.size.to::<u64>();
+    let state = arb_sys.sendMerkleTreeState().from(Address::ZERO).call().await?;
+    let size = state.size;
 
     let node_interface = INodeInterface::new(NODE_INTERFACE, route.inbox_provider.clone());
     let leaf = position.to::<u64>();
