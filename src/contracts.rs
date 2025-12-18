@@ -152,7 +152,7 @@ sol! {
     interface IArbSys {
         event L2ToL1Tx(address caller, address indexed destination, uint256 indexed hash, uint256 indexed position, uint256 arbBlockNum, uint256 ethBlockNum, uint256 timestamp, uint256 callvalue, bytes data);
         function sendTxToL1(address destination, bytes calldata data) external payable returns (uint256);
-        function sendMerkleTreeState() external view returns (uint256 size, bytes32 root, bytes32[] memory partials);
+        function sendMerkleTreeState() external view returns (uint64 size, bytes32 root, bytes32[] memory partials);
     }
     #[derive(Debug)]
     #[sol(rpc)]
