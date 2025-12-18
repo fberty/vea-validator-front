@@ -2,6 +2,34 @@
 
 set -e
 
+set -o pipefail
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Missing required command: $1"
+    exit 1
+  }
+}
+
+extract_snapshot_id() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.result'
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])'
+    return
+  fi
+  echo "Missing required command: jq (or python3 as fallback)"
+  exit 1
+}
+
+require_cmd pkill
+require_cmd anvil
+require_cmd forge
+require_cmd cast
+require_cmd curl
+
 # Kill any existing anvil processes
 pkill -f "anvil.*854[567]" || true
 
@@ -228,7 +256,7 @@ echo "  AMB (Gnosis):         $AMB_GNOSIS"
 echo "Taking pristine snapshot..."
 SNAPSHOT_ID=$(curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"evm_snapshot","params":[],"id":1}' \
-  localhost:8545 | jq -r '.result')
+  localhost:8545 | extract_snapshot_id)
 curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"evm_snapshot","params":[],"id":1}' \
   localhost:8546 > /dev/null
