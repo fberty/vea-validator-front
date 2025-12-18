@@ -58,7 +58,7 @@ Each route has its own JSON files for persistence:
 | `send_snapshot` | Challenged event | sends snapshot via native bridge |
 | `start_verification` | valid claim (after `start_verification_delay`) | starts verification period |
 | `verify_snapshot` | VerificationStarted + minChallengePeriod | finalizes verification |
-| `execute_relay` | SnapshotSent (after `relay_delay`) | executes L2→L1 message on Arbitrum outbox |
+| `execute_relay` | SnapshotSent (after `relay_delay`) | executes L2→L1 message on Arbitrum Outbox |
 | `withdraw_deposit` | Verified event | withdraws to honest party |
 
 ## Sync Behavior
@@ -136,3 +136,9 @@ Two types of route-specific branching:
 | Task | ARB_TO_ETH | ARB_TO_GNOSIS |
 |------|------------|---------------|
 | `send_snapshot` | `sendSnapshot(epoch, claim)` | `sendSnapshot(epoch, gas_limit, claim)` |
+
+## Known Issues
+
+### Execute Relay (WIP)
+
+L2→L1 message relay via `execute_relay` is currently broken on Sepolia. Getting `UnknownRoot` errors when calling `Outbox.executeTransaction`. Investigation ongoing.
