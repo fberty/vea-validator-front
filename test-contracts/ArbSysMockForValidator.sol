@@ -8,10 +8,10 @@ contract ArbSysMockForValidator is IArbSys {
     uint256 public nextPosition;
 
     event L2ToL1Tx(
-        address indexed caller,
+        address caller,
         address indexed destination,
         uint256 indexed hash,
-        uint256 position,
+        uint256 indexed position,
         uint256 arbBlockNum,
         uint256 ethBlockNum,
         uint256 timestamp,
